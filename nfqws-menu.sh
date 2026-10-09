@@ -3540,6 +3540,11 @@ show_dns_servers() {
 }
 
 dns_save_config() {
+  # Сохранение конфигурации роутера нужно только там, где она в ndmc;
+  # на OpenWrt изменения в файлах персистентны сами по себе.
+  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
+    return 0
+  fi
   printf '%s' "Сохранение конфигурации..."
   if ndmc_cli "system configuration save" > /dev/null 2>&1; then
     printf ' %s\n' "${GREEN}[ГОТОВО]${NC}"
@@ -3551,6 +3556,10 @@ dns_save_config() {
 }
 
 apply_dot() {
+  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
+    info "Привязка DNS через dns-proxy пропущена (доступно только на Keenetic/Netcraze)."
+    return 0
+  fi
   local ip="$1" sni="$2" domain="$3" port="$4" cmd
   cmd="dns-proxy tls upstream $ip"
   [ -n "$port" ] && cmd="$cmd $port"
@@ -3561,6 +3570,10 @@ apply_dot() {
 }
 
 apply_doh() {
+  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
+    info "Привязка DNS через dns-proxy пропущена (доступно только на Keenetic/Netcraze)."
+    return 0
+  fi
   local uri="$1" domain="$2" cmd
   cmd="dns-proxy https upstream $uri"
   [ -n "$domain" ] && cmd="$cmd domain $domain"
@@ -4066,10 +4079,120 @@ menu_dns_manage() {
 }
 
 # ---------------------------------------------------------------------------
-# 8. Обновление hosts (статические записи ip host через ndmc)
+# 8. Обновление hosts (статические DNS-записи)
+# Keenetic: «ip host» через ndmc; OpenWrt: блок в /etc/hosts (dnsmasq)
 # ---------------------------------------------------------------------------
+HOSTS_MARK_BEGIN="# >>> nfqws-menu hosts >>>"
+HOSTS_MARK_END="# <<< nfqws-menu hosts <<<"
+
+hosts_backend() {
+  if [ "$ROUTER_OS" = "openwrt" ]; then echo "openwrt"; else echo "keenetic"; fi
+}
+
+reload_dns_service() {
+  if [ -x /etc/init.d/dnsmasq ]; then
+    /etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null || true
+    info "dnsmasq перечитан."
+  else
+    warn "dnsmasq не найден — перезапустите DNS-сервис вручную."
+  fi
+}
+
+# Текущие статические записи — форматированные строки на stdout
+host_entries_view() {
+  if [ "$(hosts_backend)" = "openwrt" ]; then
+    [ -r /etc/hosts ] || return 0
+    awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" '
+      $0 == B { inb=1; next }
+      $0 == E { inb=0; next }
+      inb && NF >= 2 { printf "  %s%-40s%s %s➔%s %s\n", C, $2, N, D, N, $1 }
+    ' C="$CYAN" N="$NC" D="$DIM" /etc/hosts 2>/dev/null
+    return 0
+  fi
+  local view_out line
+  view_out=$(ndmc_cli "show running-config" 2>/dev/null)
+  [ -n "$view_out" ] || view_out=$(ndmc_cli "show run" 2>/dev/null)
+  [ -n "$view_out" ] || return 0
+  printf '%s\n' "$view_out" | grep -E '^[[:space:]]*ip host[[:space:]]' | while IFS= read -r line || [ -n "$line" ]; do
+    set -- $line
+    if [ "$1" = "ip" ] && [ "$2" = "host" ] && [ -n "$3" ] && [ -n "$4" ]; then
+      printf '  %s%-40s%s %s➔%s %s\n' "$CYAN" "$3" "$NC" "$DIM" "$NC" "$4"
+    fi
+  done
+}
+
+# Удалить все записи; $1 = файл со списком доменов
+host_entries_delete_all() {
+  if [ "$(hosts_backend)" = "openwrt" ]; then
+    if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
+      awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
+        '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > /etc/hosts.nfqws.tmp \
+        && cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
+      reload_dns_service
+      info "Блок nfqws-menu удалён из /etc/hosts."
+    else
+      info "Записей nfqws-menu в /etc/hosts нет."
+    fi
+    return 0
+  fi
+  local removed=0 failed=0 domain cmd
+  while IFS= read -r domain || [ -n "$domain" ]; do
+    [ -z "$domain" ] && continue
+    cmd="no ip host $domain"
+    printf '%s\n' "${CYAN}  ndmc -c \"$cmd\"${NC}"
+    if ndmc_cli "$cmd" > /dev/null 2>&1; then
+      removed=$((removed + 1))
+    else
+      warn "  ошибка: $domain"
+      failed=$((failed + 1))
+    fi
+  done < "$1"
+  info "Удалено: $removed, ошибок: $failed"
+  if [ "$removed" -gt 0 ] || [ "$failed" -gt 0 ]; then
+    dns_save_config
+  fi
+}
+
+# Применить записи; $1 = файл пар «IP<TAB>DOMAIN»
+host_entries_apply() {
+  if [ "$(hosts_backend)" = "openwrt" ]; then
+    [ -f /etc/hosts ] || : > /etc/hosts
+    local block="/tmp/nfqws-hosts-block-$$.tmp"
+    {
+      printf '%s\n' "$HOSTS_MARK_BEGIN"
+      awk -F '\t' 'NF >= 2 && $1 != "" && $2 != "" { print $1 " " $2 }' "$1"
+      printf '%s\n' "$HOSTS_MARK_END"
+    } > "$block"
+    # прежний блок заменяется целиком
+    awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
+      '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > "${block}.base" 2>/dev/null \
+      || : > "${block}.base"
+    cat "${block}.base" "$block" > /etc/hosts
+    rm -f "$block" "${block}.base"
+    info "Записано: /etc/hosts ($(wc -l < "$1" | tr -d ' ') доменов)."
+    reload_dns_service
+    return 0
+  fi
+  local added=0 failed=0 ip domain cmd
+  while IFS="$(printf '\t')" read -r ip domain || [ -n "$ip" ]; do
+    [ -z "$ip" ] || [ -z "$domain" ] && continue
+    cmd="ip host $domain $ip"
+    printf '%s\n' "${CYAN}  ndmc -c \"$cmd\"${NC}"
+    if ndmc_cli "$cmd" > /dev/null 2>&1; then
+      added=$((added + 1))
+    else
+      warn "  ошибка: $domain → $ip"
+      failed=$((failed + 1))
+    fi
+  done < "$1"
+  info "Добавлено: $added, ошибок: $failed"
+  if [ "$added" -gt 0 ] || [ "$failed" -gt 0 ]; then
+    dns_save_config
+  fi
+}
+
 menu_update_hosts() {
-  if ! command -v ndmc >/dev/null 2>&1; then
+  if [ "$(hosts_backend)" = "keenetic" ] && ! command -v ndmc >/dev/null 2>&1; then
     error "ndmc не найден. Функция доступна только на Keenetic/Netcraze OS."
     return 1
   fi
@@ -4129,27 +4252,18 @@ menu_update_hosts() {
   done
   if [ "$want_view" -eq 1 ]; then
     echo
-    printf '%s\n' "${BOLD}${YELLOW}Текущие записи ip host на роутере:${NC}"
+    printf '%s\n' "${BOLD}${YELLOW}Текущие статические DNS-записи:${NC}"
     printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
-    local view_out view_cnt=0 line
-    # Keenetic 4.2+: show running-config / show run содержат строки «ip host DOMAIN IP»
-    view_out=$(ndmc_cli "show running-config" 2>/dev/null) || view_out=""
-    if [ -z "$view_out" ]; then
-      view_out=$(ndmc_cli "show run" 2>/dev/null) || view_out=""
-    fi
-    if [ -n "$view_out" ]; then
-      view_cnt=$(printf '%s\n' "$view_out" | grep -cE '^[[:space:]]*ip host[[:space:]]' || true)
-      printf '%s\n' "$view_out" | grep -E '^[[:space:]]*ip host[[:space:]]' | while IFS= read -r line || [ -n "$line" ]; do
-        set -- $line
-        if [ "$1" = "ip" ] && [ "$2" = "host" ] && [ -n "$3" ] && [ -n "$4" ]; then
-          printf '  %s%-40s%s %s➔%s %s\n' "$CYAN" "$3" "$NC" "$DIM" "$NC" "$4"
-        else
-          printf '  %s\n' "$line"
-        fi
-      done
-    fi
-    if [ -z "$view_out" ] || [ "${view_cnt:-0}" -eq 0 ]; then
-      printf '  %s— записей ip host нет —%s\n' "$DIM" "$NC"
+    local view_cnt=0 view_line
+    while IFS= read -r view_line || [ -n "$view_line" ]; do
+      [ -n "$view_line" ] || continue
+      view_cnt=$((view_cnt + 1))
+      printf '%s\n' "$view_line"
+    done <<EOF
+$(host_entries_view)
+EOF
+    if [ "$view_cnt" -eq 0 ]; then
+      printf '  %s— записей нет —%s\n' "$DIM" "$NC"
     else
       printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
       info "Всего: $view_cnt"
@@ -4188,23 +4302,8 @@ menu_update_hosts() {
       return 0
     fi
 
-    local removed=0 failed=0 domain cmd
-    while IFS= read -r domain || [ -n "$domain" ]; do
-      [ -z "$domain" ] && continue
-      cmd="no ip host $domain"
-      printf '%s\n' "${CYAN}  ndmc -c \"$cmd\"${NC}"
-      if ndmc_cli "$cmd" > /dev/null 2>&1; then
-        removed=$((removed + 1))
-      else
-        warn "  ошибка: $domain"
-        failed=$((failed + 1))
-      fi
-    done < "$domains"
+    host_entries_delete_all "$domains"
 
-    info "Удалено: $removed, ошибок: $failed"
-    if [ "$removed" -gt 0 ] || [ "$failed" -gt 0 ]; then
-      dns_save_config
-    fi
     rm -f "$tmp" "$sec_file" "$domains"
     info "Готово."
     return 0
@@ -4285,28 +4384,11 @@ $name"
 
   local n_pairs
   n_pairs=$(wc -l < "$pairs_uniq" | tr -d ' ')
-  if [ "$n_pairs" -gt 64 ]; then
+  if [ "$(hosts_backend)" = "keenetic" ] && [ "$n_pairs" -gt 64 ]; then
     warn "Keenetic допускает до 64 записей ip host (сейчас $n_pairs). Часть может не добавиться."
   fi
 
-  local added=0 failed=0
-  local ip domain cmd
-  while IFS="$(printf '\t')" read -r ip domain || [ -n "$ip" ]; do
-    [ -z "$ip" ] || [ -z "$domain" ] && continue
-    cmd="ip host $domain $ip"
-    printf '%s\n' "${CYAN}  ndmc -c \"$cmd\"${NC}"
-    if ndmc_cli "$cmd" > /dev/null 2>&1; then
-      added=$((added + 1))
-    else
-      warn "  ошибка: $domain → $ip"
-      failed=$((failed + 1))
-    fi
-  done < "$pairs_uniq"
-
-  info "Добавлено: $added, ошибок: $failed (уникальных доменов: $n_pairs)"
-  if [ "$added" -gt 0 ] || [ "$failed" -gt 0 ]; then
-    dns_save_config
-  fi
+  host_entries_apply "$pairs_uniq"
 
   rm -f "$tmp" "$sec_file" "$pairs" "$pairs_uniq"
   info "Готово."
@@ -6317,7 +6399,7 @@ main_menu() {
       4)  update_rkn_list || true ;;
       5)  menu_dot_doh || true ;;
       6)  menu_change_fake_blob || true ;;
-      7)  require_keenetic && menu_update_hosts || true ;;
+      7)  menu_update_hosts || true ;;
       8)  require_keenetic && menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
       11) menu_awg_manager || true ;;
