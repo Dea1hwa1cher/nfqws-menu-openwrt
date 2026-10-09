@@ -76,6 +76,8 @@ INIT_BASE_DIR="/opt/etc/init.d"
 BIN_BASE_DIR="/opt/bin"
 STATUS_FILE="/opt/lib/opkg/status"
 OPKG_CONF_DIR="/opt/etc/opkg"
+APK_REPO_DIR="/etc/apk/repositories.d"
+APK_KEYS_DIR="/etc/apk/keys"
 
 # RCI show/version для Keenetic (один раз за сессию)
 _rci_fetch() {
@@ -173,6 +175,8 @@ detect_os() {
       elif [ -r /proc/net/netfilter/nfnetlink_queue ]; then
         OS_HAS_NF_QUEUE=1
       elif [ -r /usr/lib/opkg/status ] && grep -qE '^Package:[[:space:]]*kmod-(nft-queue|ipt-nfqueue)' /usr/lib/opkg/status 2>/dev/null; then
+        OS_HAS_NF_QUEUE=1
+      elif command -v apk >/dev/null 2>&1 && apk list --installed 2>/dev/null | grep -qE '^kmod-(nft-queue|ipt-nfqueue)-'; then
         OS_HAS_NF_QUEUE=1
       else
         OS_HAS_NF_QUEUE=0
@@ -870,9 +874,57 @@ run_menu_remote_sh() {
 # Записать opkg-репозиторий и обновить индекс
 ensure_opkg_repo() {
   local name="$1" url="$2"
-  mkdir -p "$OPKG_CONF_DIR"
-  echo "src/gz $name $url" > "$OPKG_CONF_DIR/${name}.conf"
-  opkg update
+  if [ "$(pkg_backend)" = "apk" ]; then
+    # OpenWrt 25.x: apk-индекс packages.adb + файл-декларация в repositories.d
+    mkdir -p "$APK_REPO_DIR"
+    echo "${url}/packages.adb" > "${APK_REPO_DIR}/${name}.list"
+  else
+    mkdir -p "$OPKG_CONF_DIR"
+    echo "src/gz $name $url" > "$OPKG_CONF_DIR/${name}.conf"
+  fi
+  pkg_update
+}
+
+# Бэкенд пакетного менеджера: opkg (Entware, OpenWrt ≤24.10) или apk (OpenWrt 25.x)
+pkg_backend() {
+  if command -v opkg >/dev/null 2>&1; then
+    echo "opkg"
+  elif command -v apk >/dev/null 2>&1; then
+    echo "apk"
+  else
+    echo "none"
+  fi
+}
+
+pkg_update() {
+  if [ "$(pkg_backend)" = "apk" ]; then
+    apk update
+  else
+    opkg update
+  fi
+}
+
+pkg_install() {
+  if [ "$(pkg_backend)" = "apk" ]; then
+    apk --update-cache add "$@"
+  else
+    opkg install "$@"
+  fi
+}
+
+pkg_remove() {
+  if [ "$(pkg_backend)" = "apk" ]; then
+    # apk del не знает --autoremove (зависимости чистит сам) — фильтруем
+    local args="" a
+    for a in "$@"; do
+      [ "$a" = "--autoremove" ] && continue
+      args="$args $a"
+    done
+    # shellcheck disable=SC2086
+    apk del $args
+  else
+    opkg remove "$@"
+  fi
 }
 
 # URL фида nfqws: $ARCH (Entware) или openwrt (нативный фид OpenWrt)
@@ -887,7 +939,19 @@ nfqws_feed_url() {
 # GPG-ключ нативного фида OpenWrt (opkg проверяет подпись Packages).
 # Файл ключа: <feed>/openwrt/<feed>.pub
 ensure_openwrt_feed_key() {
-  local feed="$1" key_file="/tmp/nfqws-feed.pub"
+  local feed="$1"
+  if [ "$(pkg_backend)" = "apk" ]; then
+    # apk: ключ .pem кладётся в /etc/apk/keys (проверка подписи автоматическая)
+    local pem="${APK_KEYS_DIR}/${feed}.pem"
+    mkdir -p "$APK_KEYS_DIR" || { error "Не создать $APK_KEYS_DIR."; return 1; }
+    if ! _http_get_file "https://nfqws.github.io/$feed/openwrt/$feed.pem" "$pem"; then
+      error "Не удалось скачать ключ фида $feed (.pem)."
+      return 1
+    fi
+    info "Ключ фида $feed установлен: $pem"
+    return 0
+  fi
+  local key_file="/tmp/nfqws-feed.pub"
   if ! command -v opkg-key >/dev/null 2>&1; then
     error "opkg-key не найден — установка подписанных пакетов OpenWrt невозможна."
     return 1
@@ -904,6 +968,12 @@ ensure_openwrt_feed_key() {
 # Установка/обновление opkg-пакета (если установлен — upgrade)
 opkg_install_or_upgrade() {
   local pkg="$1"
+  if [ "$(pkg_backend)" = "apk" ]; then
+    # apk add сам ставит или обновляет до последней доступной версии
+    info "Установка/обновление $pkg..."
+    pkg_install "$pkg"
+    return 0
+  fi
   if is_installed "$pkg"; then
     info "Пакет $pkg уже установлен — обновление..."
     opkg update
@@ -972,6 +1042,11 @@ _arch_pick_best() {
 }
 
 _arch_from_opkg() {
+  if [ "$(pkg_backend)" = "apk" ]; then
+    # apk --print-arch отдаёт одно слово — приведём к виду «arch NAME PRI»
+    apk --print-arch 2>/dev/null | awk '{ print "arch " $1 " 100" }' | _arch_pick_best
+    return
+  fi
   opkg print-architecture 2>/dev/null | _arch_pick_best
 }
 
@@ -1037,9 +1112,9 @@ print_arch_line() {
   if [ "$ROUTER_OS" = "openwrt" ]; then
     if [ "$OS_HAS_NF_QUEUE" = "0" ]; then
       if [ "$ROUTER_FW_TYPE" = "fw4" ]; then
-        printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите: opkg update && opkg install kmod-nft-queue${NC}"
+        printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите пакет kmod-nft-queue менеджером пакетов прошивки${NC}"
       else
-        printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите: opkg update && opkg install kmod-ipt-nfqueue iptables-mod-nfqueue${NC}"
+        printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите пакеты kmod-ipt-nfqueue iptables-mod-nfqueue менеджером пакетов прошивки${NC}"
       fi
     fi
   elif [ "$ROUTER_OS" = "keenetic" ]; then
@@ -1139,6 +1214,22 @@ PORT90_CACHE=""
 # Только Status «… installed» (не «not-installed» — старые residual-записи).
 # Формат строк: «name - version».
 refresh_opkg_cache() {
+  if [ "$(pkg_backend)" = "apk" ]; then
+    # apk list --installed: «name-version arch {…} [installed]» → «name - version».
+    # Версию собираем с конца: -rN ревизия + сегмент, начинающийся с цифры
+    # (regex не подходит: левое совпадение режет имена типа nfqws-keenetic-*).
+    OPKG_INSTALLED_CACHE=$(apk list --installed 2>/dev/null | awk '{
+      nv = $1
+      n = split(nv, seg, "-")
+      ver = ""
+      if (n >= 2 && seg[n] ~ /^r[0-9]+$/) { ver = "-" seg[n]; n-- }
+      if (n >= 1 && seg[n] ~ /^[0-9]/) { ver = seg[n] ver; n-- }
+      name = seg[1]
+      for (i = 2; i <= n; i++) name = name "-" seg[i]
+      if (name != "" && ver != "") print name " - " ver
+    }') || OPKG_INSTALLED_CACHE=""
+    return 0
+  fi
   local status="$STATUS_FILE"
   [ -r "$status" ] || status="/usr/lib/opkg/status"
   if [ ! -r "$status" ]; then
@@ -1596,9 +1687,9 @@ nfqws_lists_dir() {
 # ---------------------------------------------------------------------------
 install_deps() {
   info "Установка зависимостей..."
-  opkg update
-  opkg install ca-certificates wget-ssl 2>/dev/null || true
-  opkg remove wget-nossl 2>/dev/null || true
+  pkg_update
+  pkg_install ca-certificates wget-ssl 2>/dev/null || true
+  pkg_remove wget-nossl 2>/dev/null || true
 }
 
 ask_web_install() {
@@ -1620,7 +1711,7 @@ install_nfqws1() {
     return 1
   fi
   ensure_opkg_repo "nfqws-keenetic" "$(nfqws_feed_url nfqws-keenetic)"
-  opkg install nfqws-keenetic
+  pkg_install nfqws-keenetic
   info "nfqws-keenetic установлен."
   ask_web_install
 }
@@ -1632,7 +1723,7 @@ install_nfqws2() {
     warn "Обнаружен nfqws-keenetic. Рекомендуется удалить его перед установкой nfqws2."
     if confirm_no "Удалить nfqws-keenetic и веб-интерфейс?"; then
       stop_nfqws1_hard
-      opkg remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
+      pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
       stop_nfqws1_hard
     fi
   fi
@@ -1641,7 +1732,7 @@ install_nfqws2() {
     return 1
   fi
   ensure_opkg_repo "nfqws2-keenetic" "$(nfqws_feed_url nfqws2-keenetic)"
-  opkg install nfqws2-keenetic
+  pkg_install nfqws2-keenetic
   info "nfqws2-keenetic установлен."
   ask_web_install
 }
@@ -1948,7 +2039,7 @@ menu_install_ipk_direct() {
         warn "Обнаружен nfqws-keenetic. Рекомендуется удалить его перед установкой nfqws2."
         if confirm_no "Удалить nfqws-keenetic и веб-интерфейс?"; then
           stop_nfqws1_hard
-          opkg remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
+          pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
           stop_nfqws1_hard
         fi
       fi
@@ -1994,7 +2085,7 @@ install_web() {
   info "Установка nfqws-keenetic-web..."
   install_deps
   ensure_opkg_repo "nfqws-keenetic-web" "https://nfqws.github.io/nfqws-keenetic-web/all"
-  opkg install nfqws-keenetic-web
+  pkg_install nfqws-keenetic-web
   info "Веб-интерфейс установлен."
   info "Адрес: http://<IP-роутера>:90"
   info "Логин/пароль — учётные данные Entware (по умолчанию root / keenetic)"
@@ -4069,8 +4160,8 @@ hdp_ensure() {
   command -v uci >/dev/null 2>&1 || { error "uci не найден."; return 1; }
   if ! hdp_installed; then
     info "Установка https-dns-proxy (DoH-прокси для dnsmasq)..."
-    opkg update >/dev/null 2>&1 || true
-    opkg install https-dns-proxy || { error "Не удалось установить https-dns-proxy."; return 1; }
+    pkg_update >/dev/null 2>&1 || true
+    pkg_install https-dns-proxy || { error "Не удалось установить https-dns-proxy."; return 1; }
   fi
   if ! uci -q get https-dns-proxy.config >/dev/null 2>&1; then
     error "Конфиг /etc/config/https-dns-proxy не найден."
@@ -5552,8 +5643,8 @@ menu_magitrickle() {
 
   if is_installed "magitrickle"; then
     info "Пакет установлен — обновление..."
-    opkg update
-    opkg install magitrickle
+    pkg_update
+    pkg_install magitrickle
     if [ -x /opt/etc/init.d/S99magitrickle ]; then
       /opt/etc/init.d/S99magitrickle restart
       info "Сервис перезапущен: /opt/etc/init.d/S99magitrickle restart"
@@ -5573,8 +5664,8 @@ menu_magitrickle() {
       error "Нужны wget или curl."
       return 1
     fi
-    opkg update
-    opkg install magitrickle
+    pkg_update
+    pkg_install magitrickle
     if [ -x /opt/etc/init.d/S99magitrickle ]; then
       /opt/etc/init.d/S99magitrickle start
       info "Сервис запущен: /opt/etc/init.d/S99magitrickle start"
@@ -5697,7 +5788,7 @@ is_awg_manager_installed() {
 
 remove_awg_manager() {
   if is_installed "awg-manager"; then
-    opkg remove awg-manager 2>/dev/null || opkg remove --autoremove awg-manager 2>/dev/null || true
+    pkg_remove awg-manager 2>/dev/null || true
   fi
   [ -d /opt/etc/awg-manager ] && rm -rf /opt/etc/awg-manager && info "  удалён каталог: /opt/etc/awg-manager"
   info "awg-manager удалён."
@@ -5705,7 +5796,7 @@ remove_awg_manager() {
 
 remove_usque_keenetic() {
   if is_installed "usque-keenetic"; then
-    opkg remove --autoremove usque-keenetic 2>/dev/null || true
+    pkg_remove usque-keenetic 2>/dev/null || true
     info "usque-keenetic удалён."
   else
     warn "usque-keenetic не установлен."
@@ -5725,7 +5816,7 @@ remove_keenkit() {
 remove_magitrickle() {
   if is_installed "magitrickle"; then
     [ -x /opt/etc/init.d/S99magitrickle ] && /opt/etc/init.d/S99magitrickle stop 2>/dev/null || true
-    opkg remove magitrickle 2>/dev/null || opkg remove --autoremove magitrickle 2>/dev/null || true
+    pkg_remove magitrickle 2>/dev/null || true
     info "magitrickle удалён."
   else
     warn "magitrickle не установлен."
@@ -5744,7 +5835,7 @@ remove_opera_proxy() {
   if is_installed "opera-proxy"; then
     [ -x /opt/etc/init.d/S99opera-proxy ] && /opt/etc/init.d/S99opera-proxy stop 2>/dev/null || true
     [ -x /opt/etc/init.d/S80opera-proxy ] && /opt/etc/init.d/S80opera-proxy stop 2>/dev/null || true
-    opkg remove opera-proxy 2>/dev/null || opkg remove --autoremove opera-proxy 2>/dev/null || true
+    pkg_remove opera-proxy 2>/dev/null || true
     info "opera-proxy удалён."
   else
     warn "opera-proxy не установлен."
@@ -6133,7 +6224,7 @@ remove_nfqws_pkg() {
       stop_nfqws1_hard
       ;;
   esac
-  opkg remove "$pkg"
+  pkg_remove "$pkg"
   # хвосты после remove
   case "$pkg" in
     nfqws2-keenetic) stop_nfqws2_hard ;;
@@ -6183,7 +6274,7 @@ menu_remove() {
       if confirm_no "Точно удалить все пакеты NFQWS (и dpi-detector, если есть)?"; then
         stop_nfqws2_hard
         stop_nfqws1_hard
-        opkg remove nfqws-keenetic-web nfqws2-keenetic nfqws-keenetic 2>/dev/null || true
+        pkg_remove nfqws-keenetic-web nfqws2-keenetic nfqws-keenetic 2>/dev/null || true
         stop_nfqws2_hard
         stop_nfqws1_hard
         remove_dpi_detector
@@ -6212,7 +6303,7 @@ menu_remove() {
           info "$target удалён."
           ;;
         *)
-          opkg remove "$target"
+          pkg_remove "$target"
           info "$target удалён."
           ;;
       esac
@@ -6226,14 +6317,26 @@ menu_remove() {
 opkg_upgrade_all() {
   echo
   info "$LBL_U"
-  info "opkg update && opkg upgrade ..."
-  if ! opkg update; then
-    error "opkg update не удался."
-    return 1
-  fi
-  if ! opkg upgrade; then
-    error "opkg upgrade не удался."
-    return 1
+  if [ "$(pkg_backend)" = "apk" ]; then
+    info "apk update && apk upgrade ..."
+    if ! pkg_update; then
+      error "apk update не удался."
+      return 1
+    fi
+    if ! apk upgrade; then
+      error "apk upgrade не удался."
+      return 1
+    fi
+  else
+    info "opkg update && opkg upgrade ..."
+    if ! opkg update; then
+      error "opkg update не удался."
+      return 1
+    fi
+    if ! opkg upgrade; then
+      error "opkg upgrade не удался."
+      return 1
+    fi
   fi
   refresh_opkg_cache
   info "Обновление пакетов завершено."
@@ -6260,8 +6363,8 @@ service_upx_compress() {
   fi
   if ! command -v upx >/dev/null 2>&1; then
     info "Установка upx..."
-    opkg update 2>/dev/null || true
-    if ! opkg install upx; then
+    pkg_update 2>/dev/null || true
+    if ! pkg_install upx; then
       error "Не удалось установить upx."
       return 1
     fi

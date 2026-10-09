@@ -57,7 +57,8 @@ menu
 | --- | --- | --- |
 | Конфиги | `/opt/etc/nfqws*/` | `/etc/nfqws*/` |
 | Сервис | `/opt/etc/init.d/S51nfqws*` | `/etc/init.d/nfqws-keenetic`, `/etc/init.d/nfqws2-keenetic` |
-| Фид пакетов | `https://nfqws.github.io/nfqws-keenetic/$ARCH` | `https://nfqws.github.io/nfqws-keenetic/openwrt` (+ GPG-ключ через `opkg-key add`) |
+| Пакетный менеджер | `opkg` | `opkg` (OpenWrt ≤24.10) или `apk` (25.x+) — определяется автоматически |
+| Фид пакетов | `https://nfqws.github.io/nfqws-keenetic/$ARCH` | `https://nfqws.github.io/nfqws-keenetic/openwrt` (+ GPG-ключ: `.pub` через `opkg-key add` / `.pem` в `/etc/apk/keys`) |
 | Symlink меню | `/opt/bin/menu` | `/usr/bin/menu` |
 | Веб-интерфейс | `nfqws-keenetic-web` | не устанавливается (сборка только под Entware) |
 | Пункт 7 (hosts) | `ndmc ip host` | блок в `/etc/hosts` + reload dnsmasq |
