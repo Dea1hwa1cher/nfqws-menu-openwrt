@@ -4,7 +4,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.9.40**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.9.41**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -48,6 +48,21 @@ menu
 ```
 
 (`/opt/bin/menu` → `/opt/nfqws-menu.sh`)
+
+### Поддержка OpenWrt
+
+Скрипт определяет ОС автоматически (OpenWrt / ImmortalWrt / Keenetic / Netcraze / Padavan) и подстраивает пути, пакетные фиды и сервисы:
+
+| | Keenetic / Netcraze (Entware) | OpenWrt |
+| --- | --- | --- |
+| Конфиги | `/opt/etc/nfqws*/` | `/etc/nfqws*/` |
+| Сервис | `/opt/etc/init.d/S51nfqws*` | `/etc/init.d/nfqws-keenetic`, `/etc/init.d/nfqws2-keenetic` |
+| Фид пакетов | `https://nfqws.github.io/nfqws-keenetic/$ARCH` | `https://nfqws.github.io/nfqws-keenetic/openwrt` (+ GPG-ключ через `opkg-key add`) |
+| Symlink меню | `/opt/bin/menu` | `/usr/bin/menu` |
+| Веб-интерфейс | `nfqws-keenetic-web` | не устанавливается (сборка только под Entware) |
+| Пункты 7/8/12 (hosts, DoT/DoH через ndmc, KeenKit) | доступны | только Keenetic (нужен `ndmc`) |
+
+Стратегии при применении автоматически переписывают пути blob/list-файлов под префикс пакета.
 
 ---
 

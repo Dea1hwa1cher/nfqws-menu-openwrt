@@ -443,7 +443,7 @@ list_up_fallback_ifaces() {
 }
 
 # Локальный кэш загрузок (offline / при блокировке GitHub)
-CACHE_DIR="/opt/etc/nfqws-menu"
+CACHE_DIR="${CONF_BASE_DIR}/nfqws-menu"
 
 cache_strategy_path() {
   # $1=ver(1|2) $2=имя.conf или default
@@ -870,9 +870,35 @@ run_menu_remote_sh() {
 # Записать opkg-репозиторий и обновить индекс
 ensure_opkg_repo() {
   local name="$1" url="$2"
-  mkdir -p /opt/etc/opkg
-  echo "src/gz $name $url" > "/opt/etc/opkg/${name}.conf"
+  mkdir -p "$OPKG_CONF_DIR"
+  echo "src/gz $name $url" > "$OPKG_CONF_DIR/${name}.conf"
   opkg update
+}
+
+# URL фида nfqws: $ARCH (Entware) или openwrt (нативный фид OpenWrt)
+nfqws_feed_url() {
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    echo "https://nfqws.github.io/$1/openwrt"
+  else
+    echo "https://nfqws.github.io/$1/$ARCH"
+  fi
+}
+
+# GPG-ключ нативного фида OpenWrt (opkg проверяет подпись Packages).
+# Файл ключа: <feed>/openwrt/<feed>.pub
+ensure_openwrt_feed_key() {
+  local feed="$1" key_file="/tmp/nfqws-feed.pub"
+  if ! command -v opkg-key >/dev/null 2>&1; then
+    error "opkg-key не найден — установка подписанных пакетов OpenWrt невозможна."
+    return 1
+  fi
+  if ! _http_get_file "https://nfqws.github.io/$feed/openwrt/$feed.pub" "$key_file"; then
+    error "Не удалось скачать GPG-ключ фида $feed."
+    return 1
+  fi
+  opkg-key add "$key_file" >/dev/null 2>&1 || { error "opkg-key add не прошёл."; return 1; }
+  info "GPG-ключ фида $feed добавлен."
+  return 0
 }
 
 # Установка/обновление opkg-пакета (если установлен — upgrade)
@@ -1108,11 +1134,12 @@ OPKG_INSTALLED_CACHE=""
 PROC_CACHE=""
 PORT90_CACHE=""
 
-# Список установленных из /opt/lib/opkg/status (без вызова opkg, без lock).
+# Список установленных из статуса opkg (Entware: /opt/lib/opkg/status,
+# OpenWrt: /usr/lib/opkg/status) — без вызова opkg, без lock.
 # Только Status «… installed» (не «not-installed» — старые residual-записи).
 # Формат строк: «name - version».
 refresh_opkg_cache() {
-  local status="/opt/lib/opkg/status"
+  local status="$STATUS_FILE"
   [ -r "$status" ] || status="/usr/lib/opkg/status"
   if [ ! -r "$status" ]; then
     OPKG_INSTALLED_CACHE=""
@@ -1306,8 +1333,17 @@ show_installed() {
     extras="${extras}awgdir
 "
   fi
-  # список S* init (имена сервисов)
-  if [ -d /opt/etc/init.d ]; then
+  # список S* init (имена сервисов); на OpenWrt сервисы в /etc/init.d без S-префикса
+  if [ "$ROUTER_OS" = "openwrt" ] && [ -d /etc/init.d ]; then
+    local f base
+    for f in /etc/init.d/nfqws*; do
+      [ -f "$f" ] && [ -x "$f" ] || continue
+      base=${f##*/}
+      [ -n "$base" ] || continue
+      extras="${extras}init|${base}
+"
+    done
+  elif [ -d /opt/etc/init.d ]; then
     local f base
     for f in /opt/etc/init.d/S[0-9][0-9]*; do
       [ -f "$f" ] && [ -x "$f" ] || continue
@@ -1528,22 +1564,30 @@ pick_nfqws_ver() {
 
 nfqws_conf_path() {
   case "$1" in
-    1) echo "/opt/etc/nfqws/nfqws.conf" ;;
-    2) echo "/opt/etc/nfqws2/nfqws2.conf" ;;
+    1) echo "${CONF_BASE_DIR}/nfqws/nfqws.conf" ;;
+    2) echo "${CONF_BASE_DIR}/nfqws2/nfqws2.conf" ;;
   esac
 }
 
+# OpenWrt: procd-сервисы nfqws-keenetic / nfqws2-keenetic; Entware: S51-скрипты
 nfqws_init_path() {
-  case "$1" in
-    1) echo "/opt/etc/init.d/S51nfqws" ;;
-    2) echo "/opt/etc/init.d/S51nfqws2" ;;
-  esac
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    case "$1" in
+      1) echo "${INIT_BASE_DIR}/nfqws-keenetic" ;;
+      2) echo "${INIT_BASE_DIR}/nfqws2-keenetic" ;;
+    esac
+  else
+    case "$1" in
+      1) echo "${INIT_BASE_DIR}/S51nfqws" ;;
+      2) echo "${INIT_BASE_DIR}/S51nfqws2" ;;
+    esac
+  fi
 }
 
 nfqws_lists_dir() {
   case "$1" in
-    1) echo "/opt/etc/nfqws" ;;
-    2) echo "/opt/etc/nfqws2/lists" ;;
+    1) echo "${CONF_BASE_DIR}/nfqws" ;;
+    2) echo "${CONF_BASE_DIR}/nfqws2/lists" ;;
   esac
 }
 
@@ -1559,6 +1603,10 @@ install_deps() {
 
 ask_web_install() {
   echo
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    info "Веб-интерфейс nfqws-keenetic-web собран только под Entware — на OpenWrt не устанавливается."
+    return 0
+  fi
   if confirm_no "Установить веб-интерфейс nfqws-keenetic-web?"; then
     install_web
   fi
@@ -1568,7 +1616,10 @@ install_nfqws1() {
   need_arch || return 1
   info "Установка nfqws-keenetic (версия 1)..."
   install_deps
-  ensure_opkg_repo "nfqws-keenetic" "https://nfqws.github.io/nfqws-keenetic/$ARCH"
+  if [ "$ROUTER_OS" = "openwrt" ] && ! ensure_openwrt_feed_key "nfqws-keenetic"; then
+    return 1
+  fi
+  ensure_opkg_repo "nfqws-keenetic" "$(nfqws_feed_url nfqws-keenetic)"
   opkg install nfqws-keenetic
   info "nfqws-keenetic установлен."
   ask_web_install
@@ -1586,7 +1637,10 @@ install_nfqws2() {
     fi
   fi
   install_deps
-  ensure_opkg_repo "nfqws2-keenetic" "https://nfqws.github.io/nfqws2-keenetic/$ARCH"
+  if [ "$ROUTER_OS" = "openwrt" ] && ! ensure_openwrt_feed_key "nfqws2-keenetic"; then
+    return 1
+  fi
+  ensure_opkg_repo "nfqws2-keenetic" "$(nfqws_feed_url nfqws2-keenetic)"
   opkg install nfqws2-keenetic
   info "nfqws2-keenetic установлен."
   ask_web_install
@@ -1667,8 +1721,8 @@ fetch_ipk_meta() {
 # Путь основного конфига пакета (пусто если не nfqws*)
 ipk_conf_path() {
   case "$1" in
-    nfqws-keenetic)  echo "/opt/etc/nfqws/nfqws.conf" ;;
-    nfqws2-keenetic) echo "/opt/etc/nfqws2/nfqws2.conf" ;;
+    nfqws-keenetic)  echo "${CONF_BASE_DIR}/nfqws/nfqws.conf" ;;
+    nfqws2-keenetic) echo "${CONF_BASE_DIR}/nfqws2/nfqws2.conf" ;;
     *) echo "" ;;
   esac
 }
@@ -1676,8 +1730,8 @@ ipk_conf_path() {
 # Каталог etc пакета в data.tar.gz
 ipk_etc_dir() {
   case "$1" in
-    nfqws-keenetic)  echo "/opt/etc/nfqws" ;;
-    nfqws2-keenetic) echo "/opt/etc/nfqws2" ;;
+    nfqws-keenetic)  echo "${CONF_BASE_DIR}/nfqws" ;;
+    nfqws2-keenetic) echo "${CONF_BASE_DIR}/nfqws2" ;;
     *) echo "" ;;
   esac
 }
@@ -1852,6 +1906,11 @@ install_ipk_from_repo() {
 menu_install_ipk_direct() {
   local v1="?" v2="?" vweb="?" base1 base2 baseweb meta choice
 
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    error "Ручная установка .ipk поддерживается только на Entware — на OpenWrt используйте установку из фида (пункты 1/2)."
+    return 1
+  fi
+
   need_arch || return 1
 
   base1="https://nfqws.github.io/nfqws-keenetic/${ARCH}"
@@ -1928,6 +1987,10 @@ menu_install_nfqws() {
 }
 
 install_web() {
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    error "nfqws-keenetic-web доступен только для Entware (Keenetic/Netcraze)."
+    return 1
+  fi
   info "Установка nfqws-keenetic-web..."
   install_deps
   ensure_opkg_repo "nfqws-keenetic-web" "https://nfqws.github.io/nfqws-keenetic-web/all"
@@ -2433,6 +2496,12 @@ apply_strategy() {
     rm -f "${tmp}.lf"
   fi
 
+  # Стратегии в репозитории написаны под Entware (/opt/etc/nfqws*) —
+  # на OpenWrt пакет живёт в /etc/nfqws*, подменяем префикс путей.
+  if [ "$CONF_BASE_DIR" != "/opt/etc" ]; then
+    sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$tmp" 2>/dev/null || true
+  fi
+
   backup_file "$conf_dest"
 
   if grep -qE '^(ISP_INTERFACE|NFQWS_ARGS|NFQWS_BASE_ARGS)=' "$tmp" 2>/dev/null; then
@@ -2774,20 +2843,20 @@ update_ipset_list() {
   apply_and_restart() {
     case "$NFQWS_VER" in
       1)
-        write_ipset "/opt/etc/nfqws/ipset.list"
-        service_restart /opt/etc/init.d/S51nfqws
+        write_ipset "$(nfqws_lists_dir 1)/ipset.list"
+        service_restart "$(nfqws_init_path 1)"
         info "Сервис nfqws перезапущен."
         ;;
       2)
-        write_ipset "/opt/etc/nfqws2/lists/ipset.list"
-        service_restart /opt/etc/init.d/S51nfqws2
+        write_ipset "$(nfqws_lists_dir 2)/ipset.list"
+        service_restart "$(nfqws_init_path 2)"
         info "Сервис nfqws2 перезапущен."
         ;;
       both)
-        write_ipset "/opt/etc/nfqws/ipset.list"
-        write_ipset "/opt/etc/nfqws2/lists/ipset.list"
-        service_restart /opt/etc/init.d/S51nfqws
-        service_restart /opt/etc/init.d/S51nfqws2
+        write_ipset "$(nfqws_lists_dir 1)/ipset.list"
+        write_ipset "$(nfqws_lists_dir 2)/ipset.list"
+        service_restart "$(nfqws_init_path 1)"
+        service_restart "$(nfqws_init_path 2)"
         info "Сервисы перезапущены."
         ;;
     esac
@@ -2815,8 +2884,8 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "/opt/etc/nfqws/ipset.list"
-      service_restart /opt/etc/init.d/S51nfqws
+      write_ipset "$(nfqws_lists_dir 1)/ipset.list"
+      service_restart "$(nfqws_init_path 1)"
       info "Сервис nfqws перезапущен."
       ;;
     2)
@@ -2824,8 +2893,8 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "/opt/etc/nfqws2/lists/ipset.list"
-      service_restart /opt/etc/init.d/S51nfqws2
+      write_ipset "$(nfqws_lists_dir 2)/ipset.list"
+      service_restart "$(nfqws_init_path 2)"
       info "Сервис nfqws2 перезапущен."
       ;;
     both)
@@ -2834,15 +2903,15 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "/opt/etc/nfqws/ipset.list"
+      write_ipset "$(nfqws_lists_dir 1)/ipset.list"
       # v2
       if ! _ipset_fetch_clean "$IPSET_NFQWS2_URL" "$tmp"; then
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "/opt/etc/nfqws2/lists/ipset.list"
-      service_restart /opt/etc/init.d/S51nfqws
-      service_restart /opt/etc/init.d/S51nfqws2
+      write_ipset "$(nfqws_lists_dir 2)/ipset.list"
+      service_restart "$(nfqws_init_path 1)"
+      service_restart "$(nfqws_init_path 2)"
       info "Сервисы перезапущены."
       ;;
   esac
@@ -2859,8 +2928,8 @@ RKN_LIST_MIRROR_URL="http://mizulina.shit.vc:666/IndeecFOX/zapret4rocket/master/
 # Аргумент --hostlist=.../rkn.list для указанной версии nfqws
 rkn_hostlist_arg() {
   case "$1" in
-    1) echo "--hostlist=/opt/etc/nfqws/rkn.list" ;;
-    2) echo "--hostlist=/opt/etc/nfqws2/lists/rkn.list" ;;
+    1) echo "--hostlist=$(nfqws_lists_dir 1)/rkn.list" ;;
+    2) echo "--hostlist=$(nfqws_lists_dir 2)/rkn.list" ;;
     *) return 1 ;;
   esac
 }
@@ -2868,8 +2937,8 @@ rkn_hostlist_arg() {
 # Путь к rkn.list для версии
 rkn_list_path() {
   case "$1" in
-    1) echo "/opt/etc/nfqws/rkn.list" ;;
-    2) echo "/opt/etc/nfqws2/lists/rkn.list" ;;
+    1) echo "$(nfqws_lists_dir 1)/rkn.list" ;;
+    2) echo "$(nfqws_lists_dir 2)/rkn.list" ;;
     *) return 1 ;;
   esac
 }
@@ -2893,8 +2962,8 @@ inject_rkn_into_mode_list() {
   [ -f "$conf" ] || { warn "Конфиг не найден: $conf — MODE_LIST не обновлён."; return 1; }
 
   case "$ver" in
-    1) user_list="/opt/etc/nfqws/user.list" ;;
-    2) user_list="/opt/etc/nfqws2/lists/user.list" ;;
+    1) user_list="$(nfqws_lists_dir 1)/user.list" ;;
+    2) user_list="$(nfqws_lists_dir 2)/user.list" ;;
   esac
 
   # уже есть
@@ -2962,10 +3031,10 @@ update_rkn_list() {
   # Проверяем существующие файлы (любая из выбранных версий)
   local check_dest=""
   case "$NFQWS_VER" in
-    1)   check_dest="/opt/etc/nfqws/rkn.list" ;;
-    2)   check_dest="/opt/etc/nfqws2/lists/rkn.list" ;;
-    both) check_dest="/opt/etc/nfqws2/lists/rkn.list"
-          [ -f "/opt/etc/nfqws/rkn.list" ] && check_dest="/opt/etc/nfqws/rkn.list"
+    1)   check_dest=$(rkn_list_path 1) ;;
+    2)   check_dest=$(rkn_list_path 2) ;;
+    both) check_dest=$(rkn_list_path 2)
+          [ -f "$(rkn_list_path 1)" ] && check_dest=$(rkn_list_path 1)
           ;;
   esac
 
@@ -3149,6 +3218,10 @@ load_dot_doh_strategy() {
     # убрать CRLF и пустые ведущие строки
     tr -d '\r' < "$tmp" | sed '/^[[:space:]]*$/d' > "$dest"
     rm -f "$tmp"
+    # пути под префикс пакета (/opt на Entware, / на OpenWrt)
+    if [ "$CONF_BASE_DIR" != "/opt/etc" ]; then
+      sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$dest" 2>/dev/null || true
+    fi
     # маркер #DNS в начало, если его нет
     if ! grep -qE '^[[:space:]]*#DNS' "$dest" 2>/dev/null; then
       { printf '%s\n' '#DNS'; cat "$dest"; } > "${dest}.n" && mv "${dest}.n" "$dest"
@@ -3163,6 +3236,10 @@ load_dot_doh_strategy() {
     printf '%s\n' "$DOT_DOH_STRATEGY_NFQWS1" > "$dest"
   else
     printf '%s\n' "$DOT_DOH_STRATEGY_NFQWS2" > "$dest"
+  fi
+  # Пути blob-файлов в стратегии — под префикс пакета (/opt на Entware, / на OpenWrt)
+  if [ "$CONF_BASE_DIR" != "/opt/etc" ]; then
+    sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$dest" 2>/dev/null || true
   fi
   return 0
 }
@@ -4244,7 +4321,12 @@ extract_script_version() {
 }
 
 update_self() {
-  local dest="/opt/nfqws-menu.sh" tmp="/tmp/nfqws-menu-update-$$.sh"
+  local dest tmp="/tmp/nfqws-menu-update-$$.sh"
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    dest="/usr/bin/nfqws-menu.sh"
+  else
+    dest="/opt/nfqws-menu.sh"
+  fi
   local remote_ver url
 
   info "Скачивание nfqws-menu.sh ..."
@@ -5108,7 +5190,7 @@ menu_telemt() {
 # 88. Удаление
 # ---------------------------------------------------------------------------
 remove_backups() {
-  local dirs="/opt/etc/nfqws /opt/etc/nfqws2 /opt/etc/nfqws2/lists"
+  local dirs="$CONF_BASE_DIR/nfqws $CONF_BASE_DIR/nfqws2 $CONF_BASE_DIR/nfqws2/lists"
   local f count=0 found=""
 
   echo
@@ -5244,8 +5326,8 @@ remove_opera_proxy() {
 # ---------------------------------------------------------------------------
 nfqws_blobs_dir() {
   case "$1" in
-    1) echo "/opt/etc/nfqws" ;;
-    2) echo "/opt/etc/nfqws2/blobs" ;;
+    1) echo "${CONF_BASE_DIR}/nfqws" ;;
+    2) echo "${CONF_BASE_DIR}/nfqws2/blobs" ;;
   esac
 }
 
@@ -5572,18 +5654,32 @@ menu_change_fake_blob() {
 # init is_running() ломается на пустом pidfile (bad number / kill without pid),
 # из-за чего процесс остаётся висеть после opkg remove.
 stop_nfqws2_hard() {
-  [ -x /opt/etc/init.d/S51nfqws2 ] && /opt/etc/init.d/S51nfqws2 stop 2>/dev/null || true
+  local init
+  init=$(nfqws_init_path 2)
+  [ -x "$init" ] && "$init" stop 2>/dev/null || true
   killall nfqws2 2>/dev/null || true
   # на всякий случай по полному пути
-  killall /opt/usr/bin/nfqws2 2>/dev/null || true
-  rm -f /opt/var/run/nfqws2.pid
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    killall /usr/bin/nfqws2 2>/dev/null || true
+    rm -f /var/run/nfqws2.pid
+  else
+    killall /opt/usr/bin/nfqws2 2>/dev/null || true
+    rm -f /opt/var/run/nfqws2.pid
+  fi
 }
 
 stop_nfqws1_hard() {
-  [ -x /opt/etc/init.d/S51nfqws ] && /opt/etc/init.d/S51nfqws stop 2>/dev/null || true
+  local init
+  init=$(nfqws_init_path 1)
+  [ -x "$init" ] && "$init" stop 2>/dev/null || true
   killall nfqws 2>/dev/null || true
-  killall /opt/usr/bin/nfqws 2>/dev/null || true
-  rm -f /opt/var/run/nfqws.pid
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    killall /usr/bin/nfqws 2>/dev/null || true
+    rm -f /var/run/nfqws.pid
+  else
+    killall /opt/usr/bin/nfqws 2>/dev/null || true
+    rm -f /opt/var/run/nfqws.pid
+  fi
 }
 
 # Удаление пакета nfqws* с предварительным kill
@@ -6157,13 +6253,23 @@ read_choice() {
 # ---------------------------------------------------------------------------
 # Главное меню
 # ---------------------------------------------------------------------------
+require_keenetic() {
+  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
+    warn "Пункт доступен только на Keenetic/Netcraze OS (использует ndmc)."
+    return 1
+  fi
+  return 0
+}
+
 main_menu() {
   upd_start
+  local os_tag="Entware"
+  [ "$ROUTER_OS" = "openwrt" ] && os_tag="OpenWrt"
   while true; do
     clear 2>/dev/null || true
     echo
     printf '%s\n' "${CYAN}========================================${NC}"
-    printf '%s\n' "${CYAN}${BOLD}    NFQWS-MENU (Entware)  v${SCRIPT_VERSION}$(upd_mark menu)${NC}"
+    printf '%s\n' "${CYAN}${BOLD}    NFQWS-MENU ($os_tag)  v${SCRIPT_VERSION}$(upd_mark menu)${NC}"
     printf '%s\n' "${CYAN}========================================${NC}"
     detect_arch
     show_installed
@@ -6211,11 +6317,11 @@ main_menu() {
       4)  update_rkn_list || true ;;
       5)  menu_dot_doh || true ;;
       6)  menu_change_fake_blob || true ;;
-      7)  menu_update_hosts || true ;;
-      8)  menu_dns_manage || true ;;
+      7)  require_keenetic && menu_update_hosts || true ;;
+      8)  require_keenetic && menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
       11) menu_awg_manager || true ;;
-      12) menu_keenkit || true ;;
+      12) require_keenetic && menu_keenkit || true ;;
       13) menu_usque_keenetic || true ;;
       14) menu_magitrickle || true ;;
       15) menu_telemt || true ;;
