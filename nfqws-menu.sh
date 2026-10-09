@@ -84,9 +84,10 @@ _rci_fetch() {
   local json
   [ "$RCI_CHECKED" = "1" ] && return 0
   RCI_CHECKED=1
-  json=$(curl -s --connect-timeout 2 --max-time 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null) \
-    || json=$(wget -qO- -T 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null) \
-    || json=""
+  # busybox ash (OpenWrt) не парсит перенос строки, за которым идёт «||» —
+  # потому однострочные условия, а не «cmd \ || cmd».
+  json=$(curl -s --connect-timeout 2 --max-time 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
+  [ -n "$json" ] || json=$(wget -qO- -T 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
   [ -n "$json" ] || return 0
 
   ROUTER_MODEL=$(printf '%s' "$json" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
@@ -102,25 +103,23 @@ detect_os() {
   [ "$OS_CHECKED" = "1" ] && return 0
   OS_CHECKED=1
 
-  # 1) OpenWrt / ImmortalWrt / forks
+  # 1) OpenWrt / ImmortalWrt / forks  2) Keenetic / Netcraze OS  3) Padavan
+  # (комментарии между ветками elif ломают парсер busybox ash — не вставлять)
   if [ -f /etc/openwrt_release ] || [ -f /etc/openwrt_version ]; then
     ROUTER_OS="openwrt"
   elif [ -f /etc/os-release ] && grep -qiE 'ID(_LIKE)?=.*(openwrt|immortalwrt)' /etc/os-release 2>/dev/null; then
     ROUTER_OS="openwrt"
   elif command -v uci >/dev/null 2>&1 && [ -d /etc/config ]; then
     ROUTER_OS="openwrt"
-  # 2) Keenetic / Netcraze OS
   elif command -v ndmc >/dev/null 2>&1 || [ -f /opt/etc/entware_release ]; then
     ROUTER_OS="keenetic"
-  # 3) Padavan
   elif [ -f /etc/padavan_version ] || (command -v nvram >/dev/null 2>&1 && nvram get productid >/dev/null 2>&1); then
     ROUTER_OS="padavan"
   else
     # Проверка RCI Keenetic (порт 79)
     local rci_test
-    rci_test=$(curl -s --connect-timeout 1 --max-time 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null \
-      || wget -qO- -T 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null \
-      || true)
+    rci_test=$(curl -s --connect-timeout 1 --max-time 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
+    [ -n "$rci_test" ] || rci_test=$(wget -qO- -T 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
     if [ -n "$rci_test" ] && printf '%s' "$rci_test" | grep -q '"model"'; then
       ROUTER_OS="keenetic"
     else
@@ -1431,6 +1430,10 @@ show_installed() {
       [ -f "$f" ] && [ -x "$f" ] || continue
       base=${f##*/}
       [ -n "$base" ] || continue
+      # пакеты nfqws* и так показываются строками opkg — не дублировать
+      case "$base" in
+        nfqws-keenetic|nfqws2-keenetic|nfqws-keenetic-web) continue ;;
+      esac
       extras="${extras}init|${base}
 "
     done
@@ -4577,8 +4580,8 @@ host_entries_delete_all() {
   if [ "$(hosts_backend)" = "openwrt" ]; then
     if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
       awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
-        '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > /etc/hosts.nfqws.tmp \
-        && cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
+        '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > /etc/hosts.nfqws.tmp
+      cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
       reload_dns_service
       info "Блок nfqws-menu удалён из /etc/hosts."
     else
@@ -4616,8 +4619,8 @@ host_entries_apply() {
     } > "$block"
     # прежний блок заменяется целиком
     awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
-      '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > "${block}.base" 2>/dev/null \
-      || : > "${block}.base"
+      '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > "${block}.base" 2>/dev/null
+    [ -f "${block}.base" ] || : > "${block}.base"
     cat "${block}.base" "$block" > /etc/hosts
     rm -f "$block" "${block}.base"
     info "Записано: /etc/hosts ($(wc -l < "$1" | tr -d ' ') доменов)."
@@ -5028,8 +5031,7 @@ tg_ws_proxy_rs_version() {
 
 # config.conf — шелл-присваивания, читаем их sed-ом (так же делает инсталлер).
 tg_ws_proxy_rs_conf_get() {
-  sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}[[:space:]]*$/\1/p" "$TG_WS_PROXY_RS_CONF" 2>/dev/null \
-    | tr -d '\r' | head -1
+  sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}[[:space:]]*$/\1/p" "$TG_WS_PROXY_RS_CONF" 2>/dev/null | tr -d '\r' | head -1
 }
 
 # Записать ключ, сохранив остальные строки и комментарии. awk, а не sed:
@@ -5272,10 +5274,7 @@ tg_ws_proxy_rs_install() {
   # оно печатает само и только после проверки связи, а «Rollback backup»
   # дублирует «Backup» тем же путём.
   esc=$(printf '\033')
-  printf '%s\n' "$out" \
-    | sed "s/${esc}\[[0-9;]*m//g" \
-    | grep -v -e '^Proxy link:' -e '^Rollback backup:' \
-    | sed 's/^/    /'
+  printf '%s\n' "$out" | sed "s/${esc}\[[0-9;]*m//g" | grep -v -e '^Proxy link:' -e '^Rollback backup:' | sed 's/^/    /'
   if [ "$rc" -ne 0 ]; then
     error "install.sh завершился с ошибкой."
     return 1
@@ -5433,9 +5432,7 @@ tg_ws_proxy_rs_show_variants() {
   normal=$(printf '%s\n' "$rows" | awk -F'|' '$1 != 4')
   fallback=$(printf '%s\n' "$rows" | awk -F'|' '$1 == 4')
 
-  TG_WS_PROXY_RS_BEST_IDX=$(printf '%s\n' "$normal" \
-    | awk -F'|' '$3 == "OK" { print $2 " " $1 }' \
-    | sort -n | awk 'NR == 1 { print $2 }')
+  TG_WS_PROXY_RS_BEST_IDX=$(printf '%s\n' "$normal" | awk -F'|' '$3 == "OK" { print $2 " " $1 }' | sort -n | awk 'NR == 1 { print $2 }')
 
   echo
   printf '%s\n' "${BOLD}Проверенные пути:${NC}"
