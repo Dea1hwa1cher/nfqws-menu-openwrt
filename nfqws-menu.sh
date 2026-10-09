@@ -1,7 +1,8 @@
 #!/bin/sh
 # nfqws-menu.sh — интерактивное меню установки/управления
-# nfqws-keenetic / nfqws2-keenetic / nfqws-keenetic-web для Entware (Keenetic / Netcraze) и OpenWrt
-# Репозиторий стратегий: https://github.com/rndnaame/nfqws-menu
+# nfqws-keenetic / nfqws2-keenetic / nfqws-keenetic-web для OpenWrt и Entware (Keenetic / Netcraze)
+# Форк: https://github.com/Dea1hwa1cher/nfqws-menu-openwrt (адаптация nfqws-menu под OpenWrt)
+# Апстрим: https://github.com/rndnaame/nfqws-menu
 #
 # Версионирование (MAJOR.MINOR.PATCH):
 #   PATCH (+0.0.1) — небольшие правки
@@ -10,11 +11,11 @@
 
 set -e
 
-SCRIPT_VERSION="0.9.41"
+SCRIPT_VERSION="0.1.0"
 
-REPO_URL="https://github.com/rndnaame/nfqws-menu"
-RAW_BASE="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main"
-STRATEGIES_API="https://api.github.com/repos/rndnaame/nfqws-menu/contents/strategies"
+REPO_URL="https://github.com/Dea1hwa1cher/nfqws-menu-openwrt"
+RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
+STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
 
 # Туннели для fallback-скачивания, если основной канал недоступен (DPI и т.п.)
 # Порядок = приоритет. opkgtun0 — usque; opgktun0 — на случай другого имени.
@@ -3490,8 +3491,8 @@ menu_dot_doh() {
 
   echo
   info "Стратегии: dns_filter_nfqws1 / dns_filter_nfqws2"
-  info "  https://github.com/rndnaame/nfqws-menu/blob/main/strategies/dns_filter_nfqws1"
-  info "  https://github.com/rndnaame/nfqws-menu/blob/main/strategies/dns_filter_nfqws2"
+  info "  https://github.com/Dea1hwa1cher/nfqws-menu-openwrt/blob/main/strategies/dns_filter_nfqws1"
+  info "  https://github.com/Dea1hwa1cher/nfqws-menu-openwrt/blob/main/strategies/dns_filter_nfqws2"
   echo
 
   if [ "$has1" -eq 1 ] && [ "$has2" -eq 1 ]; then
@@ -5648,7 +5649,7 @@ remove_tg_ws_proxy_rs() {
 }
 
 # 13. usque-keenetic  (installer_usque.sh in this repo)
-USQUE_INSTALL_URL="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_usque.sh"
+USQUE_INSTALL_URL="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/installer_usque.sh"
 
 menu_usque_keenetic() {
   require_entware || return 1
@@ -5717,7 +5718,7 @@ EOF
 # ---------------------------------------------------------------------------
 # 15. telemt / telemt-panel — installer_telemt.sh
 # ---------------------------------------------------------------------------
-TELEMT_BUNDLE_URL="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_telemt.sh"
+TELEMT_BUNDLE_URL="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/installer_telemt.sh"
 TELEMT_SYSTEMCTL_URL="https://raw.githubusercontent.com/anch665/keendev/main/systemctl.sh"
 TELEMT_JOURNALCTL_URL="https://raw.githubusercontent.com/anch665/keendev/main/journalctl.sh"
 

@@ -1,10 +1,12 @@
-# NFQWS-MENU
+# NFQWS-MENU (OpenWrt / Keenetic)
 
-Интерактивное меню установки и управления пакетами **nfqws-keenetic**, **nfqws2-keenetic** и **nfqws-keenetic-web** для роутеров **Keenetic / Netcraze** с **Entware**.
+Интерактивное меню установки и управления пакетами **nfqws-keenetic**, **nfqws2-keenetic** и **nfqws-keenetic-web** для роутеров на **OpenWrt** (нативно, opkg и apk) и **Keenetic / Netcraze** с **Entware**.
+
+Это форк [**rndnaame/nfqws-menu**](https://github.com/rndnaame/nfqws-menu), адаптированный под чистый OpenWrt: автоматическое определение ОС, нативные фиды пакетов nfqws, procd-сервисы, DNS/hosts через UCI и dnsmasq, поддержка apk (OpenWrt 25.x). Поведение на Keenetic/Entware сохранено без изменений.
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.9.41**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.0**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -29,34 +31,50 @@
 
 ## Быстрый старт
 
-Подключитесь к Entware (SSH, порт 222 или 22, логин `root`):
+### OpenWrt
+
+SSH на роутер (логин `root`), затем:
 
 ```bash
-opkg update && opkg install curl libnghttp2 && curl -sSL https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/nfqws-menu.sh -o /opt/nfqws-menu.sh && sh /opt/nfqws-menu.sh
+opkg update && opkg install curl && curl -sSL https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/nfqws-menu.sh -o /usr/bin/nfqws-menu.sh && sh /usr/bin/nfqws-menu.sh
 ```
 
 или с wget:
 
 ```bash
-wget -O /opt/nfqws-menu.sh https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/nfqws-menu.sh && chmod +x /opt/nfqws-menu.sh && sh /opt/nfqws-menu.sh
+wget -O /usr/bin/nfqws-menu.sh https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/nfqws-menu.sh && sh /usr/bin/nfqws-menu.sh
 ```
 
-После первого запуска создаётся symlink для быстрого старта:
+На OpenWrt 25.x+ с `apk` команда та же — скрипт сам определит пакетный менеджер. После первого запуска создаётся symlink для быстрого старта:
+
+```bash
+menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
+```
+
+### Keenetic / Netcraze (Entware)
+
+Подключитесь к Entware (SSH, порт 222 или 22, логин `root`):
+
+```bash
+opkg update && opkg install curl libnghttp2 && curl -sSL https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/nfqws-menu.sh -o /opt/nfqws-menu.sh && sh /opt/nfqws-menu.sh
+```
+
+После первого запуска создаётся symlink `/opt/bin/menu` → `/opt/nfqws-menu.sh`:
 
 ```bash
 menu
 ```
 
-(`/opt/bin/menu` → `/opt/nfqws-menu.sh`)
+---
 
-### Поддержка OpenWrt
+## Поддержка OpenWrt
 
 Скрипт определяет ОС автоматически (OpenWrt / ImmortalWrt / Keenetic / Netcraze / Padavan) и подстраивает пути, пакетные фиды и сервисы:
 
 | | Keenetic / Netcraze (Entware) | OpenWrt |
 | --- | --- | --- |
 | Конфиги | `/opt/etc/nfqws*/` | `/etc/nfqws*/` |
-| Сервис | `/opt/etc/init.d/S51nfqws*` | `/etc/init.d/nfqws-keenetic`, `/etc/init.d/nfqws2-keenetic` |
+| Сервис | `/opt/etc/init.d/S51nfqws*` | `/etc/init.d/nfqws-keenetic`, `/etc/init.d/nfqws2-keenetic` (procd) |
 | Пакетный менеджер | `opkg` | `opkg` (OpenWrt ≤24.10) или `apk` (25.x+) — определяется автоматически |
 | Фид пакетов | `https://nfqws.github.io/nfqws-keenetic/$ARCH` | `https://nfqws.github.io/nfqws-keenetic/openwrt` (+ GPG-ключ: `.pub` через `opkg-key add` / `.pem` в `/etc/apk/keys`) |
 | Symlink меню | `/opt/bin/menu` | `/usr/bin/menu` |
@@ -65,7 +83,7 @@ menu
 | Пункт 8 (DoT/DoH) | `ndmc dns-proxy` | `https-dns-proxy` + dnsmasq per-domain (DoH) |
 | Пункт 12 (KeenKit) | доступен | только Keenetic (нужен `ndmc`) |
 
-Стратегии при применении автоматически переписывают пути blob/list-файлов под префикс пакета.
+Стратегии при применении автоматически переписывают пути blob/list-файлов под префикс пакета (`/opt/etc/nfqws*` → `/etc/nfqws*`).
 
 Сторонние утилиты на OpenWrt:
 
@@ -76,14 +94,16 @@ menu
 | 16. tg-ws-proxy-rs | нативная ветка установщика (LuCI, `/usr/bin`, `/etc/init.d/tg-ws-proxy-rs`) |
 | 11. awg-manager, 13. usque, 15. telemt, o. opera-proxy | только Entware — в меню выводится предупреждение |
 
+Проверено на реальном устройстве: Xiaomi Mi Router R3, OpenWrt 24.10.1 (mipsel_24kc, fw4).
+
 ---
 
 ## Что делает меню
 
 При запуске скрипт:
 
-1. Определяет архитектуру: **`opkg print-architecture`** (основной) → при ошибке **`/opt/etc/opkg.conf`** → fallback `uname -m`. На части Keenetic `uname`/RCI отдают `mips` вместо `mipsel` — поэтому opkg приоритетнее.
-2. Заголовок: **Модель / Title / ARCH** из RCI (`/rci/show/version`). ARCH зелёный (из opkg) или жёлтый (из conf/uname). Если в RCI нет `opkg-kmod-netfilter` — красное предупреждение установить «Модули ядра подсистемы Netfilter».
+1. Определяет ОС (`/etc/openwrt_release` → `os-release` → `uci` → `ndmc`/Entware → Padavan → RCI) и архитектуру: **`opkg print-architecture`** / **`apk --print-arch`** → при ошибке **opkg.conf** → fallback `uname -m`. На части Keenetic `uname`/RCI отдают `mips` вместо `mipsel` — поэтому opkg приоритетнее.
+2. Заголовок: **Модель / Title / ARCH** — на Keenetic из RCI (`/rci/show/version`), на OpenWrt из `/tmp/sysinfo/model` и `/etc/openwrt_release`. ARCH зелёный (из opkg/openwrt_release) или жёлтый (из conf/uname). Предупреждение, если нет модулей NFQUEUE: на OpenWrt — `kmod-nft-queue` (fw4) / `kmod-ipt-nfqueue` (fw3), на Keenetic — компонент «Модули ядра подсистемы Netfilter».
 3. Показывает **только установленные** компоненты (версии и статус) одним проходом awk по status/process-кэшу:
    - пакеты NFQWS / web, usque-keenetic, **tg-ws-proxy-rs**, magitrickle;
    - dpi-detector, awg-manager (⚡ при sing-box / amneziawg), KeenKit, telemt, opera-proxy, cron, dropbear;
@@ -119,14 +139,14 @@ menu
       00. Выход
 ```
 
-Горячие клавиши: **S** — сервисные утилиты (UPX, Dropbear fix, upgrade пакетов); **U** — `opkg update && opkg upgrade`; **77** — смена языка RU↔EN.
+Горячие клавиши: **S** — сервисные утилиты (UPX, Dropbear fix, upgrade пакетов); **U** — обновление всех пакетов; **77** — смена языка RU↔EN.
 
 Пример блока статуса:
 
 ```
 Установленные компоненты:
-  nfqws2-keenetic        1.3.x ⚡
-  nfqws-keenetic-web     3.x ⚡
+  nfqws2-keenetic        1.3.1 ⚡
+  nfqws-keenetic-web     3.0.24 ⚡
   tg-ws-proxy-rs         2.x ⚡
   dpi-detector           …
   ⭡ - доступна более новая версия
@@ -144,9 +164,12 @@ menu
 0) Назад
 ```
 
-- **1–2** — зависимости (`ca-certificates`, `wget-ssl`), официальный opkg-репозиторий под архитектуру, установка пакета; при v2, если стоит v1 — предложение удалить старый пакет. После установки — предложение поставить веб.
-- **3** — веб-интерфейс (lighttpd + PHP, порт **90**): `http://<IP-роутера>:90`, логин/пароль Entware (`root` / `keenetic` по умолчанию).
-- **4** — прямая установка **.ipk** (обход DPI): версии с github.io, скачивание с GitHub Releases → ghproxy → github.io, затем `opkg install` локального файла (конфиги при необходимости извлекаются из .ipk).
+- **1–2** — зависимости (`ca-certificates`, `wget-ssl`), официальный репозиторий и установка пакета:
+  - **OpenWrt** — нативный фид `https://nfqws.github.io/<repo>/openwrt` с GPG-ключом (opkg: `opkg-key add` .pub; apk: .pem в `/etc/apk/keys`);
+  - **Entware** — фид `https://nfqws.github.io/<repo>/$ARCH`.
+  При v2, если стоит v1 — предложение удалить старый пакет. После установки — предложение поставить веб.
+- **3** — веб-интерфейс (lighttpd + PHP, порт **90**): `http://<IP-роутера>:90`. На OpenWrt ставится из нативного фида; логин/пароль — учётные данные root роутера (отключается в `/etc/nfqws_web.conf`: `enabled = false`). На Entware — фид `.../all`, логин/пароль Entware (`root` / `keenetic` по умолчанию).
+- **4** — прямая установка **.ipk** (обход DPI; только Entware): версии с github.io, скачивание с GitHub Releases → ghproxy → github.io, затем `opkg install` локального файла (конфиги при необходимости извлекаются из .ipk).
 
 > Фикс TLS reasm с **NFQWS2 ≥ 1.3.1** входит в официальный пакет.
 
@@ -156,10 +179,11 @@ menu
 - Показывает список `.conf` из:
   - `strategies/nfqws1/` — для v1
   - `strategies/nfqws2/` — для v2
-- Список стратегий: **`SHA256SUMS`** → GitHub API → **локальный offline-кэш** (`/opt/etc/nfqws-menu/strategies/…`).
+- Список стратегий: **`SHA256SUMS`** → GitHub API → **локальный offline-кэш** (`${CONF_BASE_DIR}/nfqws-menu/strategies/…`, на OpenWrt `/etc/nfqws-menu/…`).
 - Скачивание: основной raw GitHub → зеркала **jsDelivr / Fastly jsDelivr / ghproxy** → fallback через туннель-интерфейсы (`awg0`, `t2s0`, …); успешный файл сохраняется в offline-кэш.
 - Делает **бэкап** текущего конфига и применяет стратегию.
 - Перед записью **нормализует CRLF → LF** (иначе `source`/iptables: `: not found`, `invalid port/service`).
+- На OpenWrt пути blob/list-файлов в стратегии автоматически переписываются под `/etc/nfqws*`.
 - **Пункт 99** — восстановление из backup: `.bak.*` от свежего к старому (самый свежий выделен), рядом имя стратегии из `general (…)` в файле; `fix_isp_interface`, перезапуск сервиса.
 - После применения выполняет пост-настройку:
 
@@ -171,7 +195,7 @@ menu
 #### Восстановление rkn.list и POLICY_*
 
 - Если до смены стратегии в `MODE_LIST` уже был `--hostlist=…/rkn.list`, привязка **восстанавливается** автоматически.
-- **`POLICY_NAME` / `POLICY_EXCLUDE`**: стандартные значения (`nfqws` / `0`) не трогаются; **нестандартные** предлагается восстановить (**по умолчанию: Нет**).
+- **`POLICY_NAME` / `POLICY_EXCLUDE`** (Keenetic): стандартные значения (`nfqws` / `0`) не трогаются; **нестандартные** предлагается восстановить (**по умолчанию: Нет**).
 
 #### Проверка blobs (наличие + SHA256)
 
@@ -193,10 +217,10 @@ menu
 [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)\
 и записывает в `ipset.list`:
 
-| Версия | Путь |
-| --- | --- |
-| nfqws-keenetic (v1) | `/opt/etc/nfqws/ipset.list` |
-| nfqws2-keenetic (v2) | `/opt/etc/nfqws2/lists/ipset.list` |
+| Версия | Entware | OpenWrt |
+| --- | --- | --- |
+| nfqws-keenetic (v1) | `/opt/etc/nfqws/ipset.list` | `/etc/nfqws/ipset.list` |
+| nfqws2-keenetic (v2) | `/opt/etc/nfqws2/lists/ipset.list` | `/etc/nfqws2/lists/ipset.list` |
 
 Бэкап, очистка пустых строк/комментариев, перезапуск сервиса. При двух установленных версиях — можно обновить обе.
 
@@ -207,11 +231,9 @@ menu
 - Если `rkn.list` уже есть — показывает размер в **КБ** (без медленного подсчёта 125k строк) и спрашивает, обновлять ли список (**по умолчанию: Нет**). При отказе скачивание пропускается.
 - Скачивает большой список доменов РКН из [IndeecFOX/zapret4rocket](https://github.com/IndeecFOX/zapret4rocket)\
   (`extra_strats/TCP/RKN/List.txt`). Сначала **GitHub raw**, затем jsDelivr / Fastly / ghproxy; при недоступности — зеркало `mizulina.shit.vc`.
-- Записывает:
-  - **v1** → `/opt/etc/nfqws/rkn.list`
-  - **v2** → `/opt/etc/nfqws2/lists/rkn.list`
+- Записывает: v1 → `${CONF_BASE_DIR}/nfqws/rkn.list`, v2 → `${CONF_BASE_DIR}/nfqws2/lists/rkn.list` (Entware: `/opt/…`, OpenWrt: `/etc/…`).
 - Добавляет `--hostlist=…/rkn.list` в `MODE_LIST` соответствующего конфига (с бэкапом), если его ещё нет. Вставка через **awk** (устойчиво к CRLF, пробелам, пустым кавычкам).
-- **Перезапуск** сервиса (`S51nfqws` / `S51nfqws2`) только при реальных изменениях (обновлён список и/или изменён `MODE_LIST`). Если hostlist уже был в конфиге и список не обновляли — перезапуск не выполняется.
+- **Перезапуск** сервиса только при реальных изменениях (обновлён список и/или изменён `MODE_LIST`). Если hostlist уже был в конфиге и список не обновляли — перезапуск не выполняется.
 
 ### 5. Обход блокировки DoT/DoH
 
@@ -222,7 +244,9 @@ menu
 - **nfqws1** — [`strategies/dns_filter_nfqws1`](strategies/dns_filter_nfqws1) (классический `--dpi-desync`)
 - **nfqws2** — [`strategies/dns_filter_nfqws2`](strategies/dns_filter_nfqws2) (lua-desync)
 
-Покрывает Cloudflare, Google, AdGuard, NextDNS, Quad9, DNS.SB, Alibaba, Xbox-DNS, Geohide и др.; при необходимости добавляет порт `853` в `TCP_PORTS` / `UDP_PORTS` и перезапускает соответствующий сервис (`S51nfqws` / `S51nfqws2`). Стратегия сначала скачивается с GitHub, при недоступности сети — встроенный fallback.
+Покрывает Cloudflare, Google, AdGuard, NextDNS, Quad9, DNS.SB, Alibaba, Xbox-DNS, Geohide и др.; при необходимости добавляет порт `853` в `TCP_PORTS` / `UDP_PORTS` и перезапускает соответствующий сервис. Стратегия сначала скачивается с GitHub, при недоступности сети — встроенный fallback (пути blob-файлов подставляются под платформу).
+
+> На OpenWrt работает полностью; Keenetic-привязки `dns-proxy` (пресеты п. 8.3) пропускаются — там нужен `ndmc`.
 
 ### 6. Смена активных fake:blob
 
@@ -236,14 +260,18 @@ menu
 
 ### 7. Обновление hosts
 
-Запись статических DNS-привязок на стороне **Keenetic** через `ndmc` (`ip host DOMAIN IP` / `no ip host DOMAIN` + сохранение конфигурации).
+Статические DNS-привязки, платформенно-зависимый бэкенд:
+
+- **Keenetic / Netcraze** — `ndmc` (`ip host DOMAIN IP` / `no ip host DOMAIN` + сохранение конфигурации роутера).
+- **OpenWrt** — управляемый блок с маркерами `# >>> nfqws-menu hosts >>>` в `/etc/hosts`; dnsmasq подхватывает его автоматически, после изменений сервис перечитывается. Удаление — чистка блока, чужие записи в `/etc/hosts` не затрагиваются.
+
+Общее:
 
 - Скачивает файл `hosts` из репозитория.
 - Секции задаются комментариями `# Имя секции`; внутри — строки `IP DOMAIN`.
-- Можно выбрать одну или несколько секций, **все**, либо **88** — удалить домены из hosts-файла.
+- Можно выбрать одну или несколько секций, **все**, либо **88** — удалить записи, **99** — просмотреть текущие.
 - Только **IPv4**; битые домены (`..`, ведущая `.`) пропускаются; **один IP на домен**.
-- Предупреждение, если уникальных записей **&gt; 64** (лимит Keenetic `ip host`).
-- Нужен `ndmc` (только Keenetic / Netcraze OS).
+- Предупреждение, если уникальных записей **> 64** (лимит Keenetic `ip host`).
 
 ### 8. Управление DoT/DoH
 
@@ -275,100 +303,71 @@ menu
 Возможности:
 
 - Просмотр текущих DoT/DoH и персональных привязок к доменам
-- Счётчик слотов **N/8** — только секция **System** (Policy0/1 и `*-filters` не учитываются)
+- Счётчик слотов **N/8** (Keenetic) — только секция **System** (Policy0/1 и `*-filters` не учитываются)
 - Пресеты DoT/DoH: Яндекс, Cloudflare, Google, Quad9, CleanBrowsing, OpenDNS, DNS.SB, OpenNameServer, AdGuard (Default/Family), ControlD Free, DNS4EU, Alibaba DNS, DNSPod, **NullsProxy**, Xbox-DNS, Comss, Malw Link, Geo Hide, Cloudflare Gateway, **AstraCat**, **Bezmezhau**, **DNS-AI**, **Mafioznik**, **Shecan Free** и др. или ручной ввод
-- Быстрая привязка доменов (пресеты):
-
-| № | Описание |
-| --- | --- |
-| 1 | CleanBrowsing DoT → instagram.com |
-| 2 | CleanBrowsing DoH → instagram.com |
-| 3 | CleanBrowsing DoT → cdninstagram.com |
-| 4 | CleanBrowsing DoH → cdninstagram.com |
-| 5 | sw.ext.io DoT → rutor.is & rutor.info |
-| 6 | Malw Link DoH → ntc.party |
-| 7 | Xbox-DNS DoT → gql.twitch.tv & usher.ttvnw.net |
-| 8 | Xbox-DNS DoH → gql.twitch.tv & usher.ttvnw.net |
-| 9 | NullsProxy DoT → Supercell (supercell.com, supercellid.com, brawlstarsgame.com, clashofclans.com, clashroyaleapp.com) |
-| 10 | NullsProxy DoH → те же домены Supercell |
-| 11 | Ввести свой домен и выбрать сервер |
-
+- Быстрая привязка доменов (Keenetic, пресеты): CleanBrowsing → instagram.com / cdninstagram.com, sw.ext.io → rutor, Malw Link → ntc.party, Xbox-DNS → Twitch, NullsProxy → Supercell, либо свой домен
 - Удаление upstream-ов с сохранением конфигурации
 
-> Нужен `ndmc` (CLI Keenetic/Netcraze).\
+> Keenetic-часть требует `ndmc`.\
 > При активном **Интернет-фильтре** часть DoT может помечаться как *disregarded*.
 
 ### 10. dpi-detector
 
 Инструмент для анализа цензуры трафика в России: обнаруживает и классифицирует блокировки сайтов, хостингов и CDN (TCP16–20 блокировки), а также подмену DNS-запросов провайдером.
 
-Актуальная версия [dpi-detector](https://github.com/Runnin4ik/dpi-detector) (ветка `rust`):
+Актуальная версия [dpi-detector](https://github.com/Runnin4ik/dpi-detector) (ветка `rust`). Установщик сам выбирает каталог: `/opt/bin` (Entware) или `/usr/local/bin` (OpenWrt — персистентный overlay).
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh | sh
-```
-
-Если бинарник уже есть (`/opt/bin/dpi-detector`) — очищает дубликаты (`/tmp`, `/opt/root`) и сразу запускает его. После установки — та же очистка дубликатов.
+Если бинарник уже есть — очищает дубликаты (`/tmp`, `/opt/root`) и сразу запускает его. После установки — та же очистка дубликатов.
 
 ### 11. awg-manager
 
 Веб-интерфейс для управления AmneziaWG VPN-туннелями на роутерах Keenetic. В тестовом режиме добавлена поддержка Sing-box (vless tcp, hysteria, trojan и др.).
 
-Установщик [awg-compressed](https://github.com/rndnaame/awg-compressed):
-
-```bash
-curl -sL https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh | sh
-```
+Установщик [awg-compressed](https://github.com/rndnaame/awg-compressed). **Только Entware** — на OpenWrt пункт выводит предупреждение.
 
 В статусе: `awg-manager` или `awg-manager [+SB]` при наличии sing-box.
 
 ### 12. KeenKit
 
-Многофункциональный скрипт, упрощающий взаимодействие с роутером на базе KeeneticOS.
+Многофункциональный скрипт, упрощающий взаимодействие с роутером на базе KeeneticOS. **Только Keenetic / Netcraze**.
 
 - Есть `/opt/keenkit.sh` — **сразу запускает**.
 - Иначе — установщик [KeenKit](https://github.com/spatiumstas/KeenKit).
 
 ### 13. usque-keenetic
 
-Адаптация неофициального клиента Cloudflare WARP с режимом MASQUE для роутеров Keenetic / Netcraze.
+Адаптация неофициального клиента Cloudflare WARP с режимом MASQUE для роутеров Keenetic / Netcraze. **Только Entware**.
 
-Через [`installer_usque.sh`](https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_usque.sh) (пункт меню 13 или напрямую):
+Через [`installer_usque.sh`](installer_usque.sh) (пункт меню 13 или напрямую):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_usque.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/installer_usque.sh | sh
 ```
 
 Подменю:
 
 1. **Установка** — пакет [usque-keenetic](https://github.com/side-effect-tm/usque-keenetic) (opkg, репозиторий `side-effect-tm.github.io/usque-keenetic/all`)
-2. **Обновление bin** — бинарник [Diniboy1123/usque](https://github.com/Diniboy1123/usque) с GitHub Releases → `/opt/usr/bin/usque` (aarch64→arm64, mipsel→mipsle, mips→mips, x86_64→amd64)
-3. **Удаление** — `opkg remove --autoremove usque-keenetic` + conf репозитория; опционально `/opt/etc/usque`
+2. **Обновление bin** — бинарник [Diniboy1123/usque](https://github.com/Diniboy1123/usque) с GitHub Releases → `/opt/usr/bin/usque`
+3. **Удаление** — `opkg remove usque-keenetic` + conf репозитория; опционально `/opt/etc/usque`
 
 - Init: `/opt/etc/init.d/S51usque` (start | stop | restart | status)
 - Конфиг: `/opt/etc/usque/usque.conf`
 - Бинарник: `/opt/usr/bin/usque`
 
-```
-# Интерфейс. Определяется автоматически при установке.
-# Должен быть вида opkgtun*
-IFACE="opkgtun0"
-```
-
 ### 14. MagiTrickle
 
-Утилита для точечной маршрутизации сетевого трафика по заданным доменным именам.
+Утилита для точечной маршрутизации сетевого трафика по заданным доменным именам. Нативно работает и на OpenWrt (её `add_repo.sh` сам поддерживает opkg и apk), и на Entware.
 
 Установка / обновление [MagiTrickle](http://bin.magitrickle.dev/):
 
-- **Не установлен** — добавление репозитория (`add_repo.sh`) + `opkg install magitrickle` + `S99magitrickle start`
-- **Установлен** → `opkg update && opkg install magitrickle` + restart сервиса
-- Init: `/opt/etc/init.d/S99magitrickle` (start | stop | restart | status)
-- Удаление — в п. 88 (с опциональным удалением `/opt/etc/opkg/magitrickle.conf`)
+- **Не установлен** — добавление репозитория (`add_repo.sh`) + установка пакета + запуск сервиса
+- **Установлен** → обновление пакета + restart сервиса
+- Init: OpenWrt — `/etc/init.d/magitrickle` (procd), Entware — `/opt/etc/init.d/S99magitrickle`
+- Удаление — в п. 88 (с опциональным удалением файла репозитория)
 
 ### 15. telemt / telemt-panel
 
-Telegram MTProto-прокси на Rust (полная реализация официального алгоритма + расширения). Скрипты: [augin/telemt_script](https://github.com/augin/telemt_script) (Entware / Keenetic, рекомендуется **aarch64**).
+Telegram MTProto-прокси на Rust (полная реализация официального алгоритма + расширения). **Только Entware** (рекомендуется **aarch64**).
 
 Подменю:
 
@@ -390,21 +389,20 @@ Telegram MTProto-прокси на Rust (полная реализация оф�
 
 | Пункт | Действие |
 | --- | --- |
-| 1 | **Сжать bin/sbin (UPX)** — `upx --lzma --best` для `/opt/bin`, `/opt/sbin`, `/opt/usr/bin`, `/opt/libexec` (при необходимости ставит `upx`) |
-| 2 | **Dropbear fix** — скрипт `sw.ext.io/ent/_addons/dropbear_fix` (с опцией сброса пароля root или без) |
-| U | **Обновить все пакеты** — `opkg update && opkg upgrade` (также клавиша **U** из главного меню) |
+| 1 | **Сжать bin/sbin (UPX)** — `upx --lzma --best` для `/opt/bin`, `/opt/sbin`, `/opt/usr/bin`, `/opt/libexec` (при необходимости ставит `upx`). Entware |
+| 2 | **Dropbear fix** — правка конфига/init Entware dropbear (с опцией сброса пароля root или без). Entware |
+| U | **Обновить все пакеты** — `opkg update && opkg upgrade` / `apk update && apk upgrade` (также клавиша **U** из главного меню) |
 
 ### 16. TG WS Proxy Rust (tg-ws-proxy-rs)
 
-[tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) — MTProto-прокси на Rust. В opkg его нет: ставит штатный `install.sh` проекта, он же пишет конфиг и Entware-инициализацию. Меню добавляет:
+[tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) — MTProto-прокси на Rust. В пакетных репозиториях его нет: ставит штатный `install.sh` проекта, который умеет обе платформы — **OpenWrt 24.10+ (с LuCI-интеграцией)** и Entware. Меню добавляет:
 
 - **секрет и порт прежней Go-установки** (если осталась) — ссылки `tg://` не меняются, Go-сервис останавливается и снимается с автозапуска;
 - **выбор сборки** — обычная или компактная (UPX), таблицей: размер на флеше и потребление памяти. По умолчанию обычная; компактная — когда флеш-памяти мало (образ распаковывается в ОЗУ и не вытесняется);
 - **подбор параметров по замерам** — CF-домены и варианты лестницы проверяются штатной пробой бинаря, затем выводится список с временем каждого, и путь выбираете вы (Enter — быстрейший);
 - **проверка связи до выдачи ссылки** — `resPQ` от DC Telegram, то есть вся цепочка, а не «порт открыт».
 
-Конфиги: `/opt/etc/tg-ws-proxy-rs/config.conf` (`DC_IP`, `CF_DOMAIN`, `EXTRA_ARGS`), `secret.conf` рядом с ним.
-Init: `/opt/etc/init.d/S99tg-ws-proxy-rs` (start / stop / status / restart)
+Пути: OpenWrt — `/usr/bin/tg-ws-proxy-rs`, `/etc/init.d/tg-ws-proxy-rs`, конфиги `/etc/tg-ws-proxy-rs/`; Entware — `/opt/bin/…`, `/opt/etc/init.d/S99tg-ws-proxy-rs`, конфиги `/opt/etc/tg-ws-proxy-rs/`.
 
 Проба есть с версии **2.4.5**; у более старого бинаря меню предложит обновиться.
 
@@ -412,7 +410,7 @@ Init: `/opt/etc/init.d/S99tg-ws-proxy-rs` (start / stop / status / restart)
 
 ### 77. Change language
 
-Мгновенное переключение интерфейса **ru ↔ en** (файл `/opt/etc/nfqws-menu.lang`).
+Мгновенное переключение интерфейса **ru ↔ en** (файл `${CONF_BASE_DIR}/nfqws-menu/nfqws-menu.lang`).
 
 ### 88. Удаление пакетов
 
@@ -428,185 +426,50 @@ Init: `/opt/etc/init.d/S99tg-ws-proxy-rs` (start / stop / status / restart)
   [0] Назад
 ```
 
-- Пакеты NFQWS — `opkg remove --autoremove`
-- **dpi-detector** — бинарник (`/opt/bin/dpi-detector` и др.)
-- **awg-manager** — `opkg remove` + `rm -rf /opt/etc/awg-manager`
-- **tg-ws-proxy-rs** — бинарь, init, конфиги
-- **usque-keenetic** — `opkg remove --autoremove` + `/opt/etc/opkg/usque-keenetic.conf`
-- **magitrickle** — `opkg remove` + запрос на удаление `/opt/etc/opkg/magitrickle.conf`
+- Пакеты NFQWS — `opkg remove` / `apk del` (по платформе)
+- **dpi-detector** — бинарник (путь по платформе)
+- **awg-manager** — `opkg remove` + `rm -rf /opt/etc/awg-manager` (Entware)
+- **tg-ws-proxy-rs** — бинарь, init, конфиги (пути по платформе)
+- **usque-keenetic** — `opkg remove` + conf репозитория (Entware)
+- **magitrickle** — удаление пакета + запрос на удаление файла репозитория (путь по платформе)
 - **KeenKit** — удаление `/opt/keenkit.sh`
 - **a)** — все пакеты NFQWS + dpi-detector
-- **b)** — `*.bak.*`, `*.conf-opkg`, `*.list-opkg` в `/opt/etc/nfqws/`, `/opt/etc/nfqws2/`, `/opt/etc/nfqws2/lists/`
+- **b)** — `*.bak.*`, `*.conf-opkg`, `*.list-opkg` в каталогах конфигов nfqws (пути по платформе)
 
 ### 99. Обновить скрипт
 
-Скачивает свежую версию из репозитория, перезаписывает `/opt/nfqws-menu.sh`, обновляет symlink `/opt/bin/menu`, сразу перезапускает меню (`exec`).
+Скачивает свежую версию **этого форка**, перезаписывает скрипт (`/usr/bin/nfqws-menu.sh` на OpenWrt, `/opt/nfqws-menu.sh` на Entware), обновляет symlink `menu`, сразу перезапускает меню (`exec`).
 
 ---
 
 ## Changelog
 
-### 0.9.x
+### 0.1.0 (форк Dea1hwa1cher/nfqws-menu-openwrt)
 
-- **Архитектура** — `opkg print-architecture` → `/opt/etc/opkg.conf` → `uname`; заголовок `Модель Title ARCH`; предупреждение без Netfilter-kmod
-- **Язык RU/EN (77)** — локализация основного меню и общих промптов; `Language: RU|EN` всегда латиницей (Telnet)
-- **Проверка обновлений** — TTL **10 мин**; `read -t` для авто-перерисовки с меткой ⭡; dpi-detector учитывает **pre-release**
-- **Компоненты** — разбор `/opt/lib/opkg/status` (только `installed`), один awk-проход; меньше зависаний при занятом opkg
-- **rkn.list** — сначала GitHub raw; очистка list через awk (в т.ч. CRLF)
-- **Стратегии** — предупреждение о **ts-фулинге** (TCP timestamps на Windows)
-- **Промпты** — единый формат `Your choice [0]:` / `Ваш выбор [0]:`; пункт **0** везде `Back` / `Назад`
+Первый релиз адаптации под OpenWrt. База — апстрим 0.9.41; вся история апстрима (0.4.0–0.9.41) — в [исходном репозитории](https://github.com/rndnaame/nfqws-menu#changelog).
 
-### 0.7.0 – 0.8.0
-
-- **Нумерация меню** — единый п. **1** (NFQWS / NFQWS2 / web / .ipk); стратегии/списки **2–8**; утилиты **10–16** (без TG WS Proxy Go)
-- **п. 1 → 4** — установка `.ipk` напрямую (GitHub Releases / ghproxy / github.io) при блокировке opkg-репозитория
-- **Проверка обновлений** — фоновый опрос (меню, tg-ws-proxy-rs, dpi-detector, awg-manager…); метка **⭡** в статусе и заголовке; TTL 10 мин (`NFQWS_MENU_UPDATE_TTL`)
-- **TG WS Proxy Go** убран из меню (остаётся миграция секрета/порта при установке Rust)
-
-### 0.6.69
-
-- **TG WS Proxy Rust (п. 17)** — отдельный пункт: `tg-ws-proxy-rs` ставится релизом с GitHub, секрет и порт прежней Go-установки переносятся
-- **Подбор параметров** — CF-домены и варианты лестницы проверяются штатной пробой бинаря (`--check-listener`, 2.4.5+), список с временем каждого выводится на выбор
-- **Сквозная проверка** — ссылка выдаётся только после `resPQ` от DC Telegram
-
-### 0.6.59 – 0.6.67
-
-- **Ввод** — убраны `stty` / `tty_setup` и чтение меню с `/dev/tty` (ломали Backspace → печать `^?`); обычный `read`; `drain_stdin` сохранён
-- **п. 1** — убран пункт «патч десинка TLS reasm» (с NFQWS2 **≥ 1.3.1** фикс в официальном пакете)
-
-### 0.6.50 – 0.6.58
-
-- **п. 16** — **telemt / telemt-panel** (augin/telemt_script): install / panel / systemD-emu / remove; статус в `show_installed`
-- **S** — сервисные утилиты: UPX-сжатие bin/sbin, Dropbear fix, **U** — `opkg upgrade` всех пакетов
-- **п. 10–12** — без лишнего `confirm` перед запуском установщиков dpi-detector / awg-manager / KeenKit
-- *(патч TLS reasm bin — временно в 0.6.50–0.6.65, снят в 0.6.66)*
-
-### 0.6.47 – 0.6.49
-
-- **Загрузки** — зеркала CDN для raw/API GitHub: jsDelivr, Fastly jsDelivr, ghproxy; offline-кэш стратегий в `/opt/etc/nfqws-menu/strategies/`
-- **Список стратегий** — SUMS → API → offline-кэш
-- **DNS (п. 9)** — пресет **NullsProxy**; привязки доменов: cdninstagram, Supercell через NullsProxy (п. 9–10), свой домен → 11
-
-### 0.6.46
-
-- **п. 3 apply_strategy** — `POLICY_NAME` / `POLICY_EXCLUDE`: стандартные (`nfqws` / `0`) не трогаются; нестандартные — восстановление по запросу (y/N)
-
-### 0.6.43 – 0.6.45
-
-- **п. 3 → 99 backup** — список `.bak.*` от свежего к старому; самый свежий выделен жёлтым; рядом со стратегией из конфига (`general (ALT11)`)
-
-### 0.6.42
-
-- **download_file** — сообщения fallback («Основной канал недоступен…», «Скачано через…») уходят в **stderr**, чтобы не попадали в `list=$(list_strategies …)` и не ломали нумерацию меню
-- **list_strategies** — дополнительно фильтрует только строки `*.conf`
-
-### 0.6.41
-
-- **п. 3 Выбор стратегии** — в конце списка добавлен **99) восстановление из backup**: вывод `nfqws.conf.bak.YYYYMMDDHHMMSS` (V1) / `nfqws2.conf.bak.…` (V2), выбор файла, запись без бэкапа текущего, `fix_isp_interface`, перезапуск сервиса
-
-### 0.6.40
-
-- **Таймауты загрузок** — увеличены для сильного DPI: connect 10 с, max 30 с, wget 25 с (раньше 5 / 15 / 12); для крупных файлов (rkn) — до 180 с
-- **п. 5 rkn.list** — при недоступности GitHub raw: jsDelivr / Fastly / ghproxy / зеркало `mizulina.shit.vc`; URL основного источника упрощён (`…/master/…` без `refs/heads`)
-
-### 0.6.36 – 0.6.39
-
-- **LBL_*** — подписи пунктов совпадают с номерами меню (`LBL_5`…`LBL_9`; удалён `LBL_7F`)
-- **DoT/DoH пресеты** — Google, AdGuard Default/Family, ControlD Free, DNS4EU, Alibaba DNS, DNSPod; убраны нерабочие Tiar Japan
-- **proc_running** — `grep -qF --` (fix при именах сервисов с ведущим `-`)
-
-### 0.6.26 – 0.6.35
-
-- **SHA256 blobs** — проверка локальных `.bin` по `strategies/blobs/SHA256SUMS`; перекачка при несовпадении хеша
-- **Список стратегий** — из корневого `SHA256SUMS` (без GitHub API), API как fallback
-- **Список blobs** (п. 7) — приоритет SUMS → API → fallback
-- **Загрузки** — при блокировке основного канала `curl --interface` через туннели (`awg0`, `t2s0`, `nwg0`, `opkgtun0`, …); короткие таймауты
-- **CI** — workflow `.github/workflows/sha256sums.yml` обновляет `SHA256SUMS` и `strategies/blobs/SHA256SUMS` (push / daily / manual)
-- **п. 3** — авто `IPV6_ENABLED` по наличию глобального IPv6 на ISP-интерфейсе; сохранение привязки **rkn.list** в `MODE_LIST` при смене стратегии
-- **DNS (п. 9)** — парсер только секция System (`proxy-tls` / `proxy-https`); Policy* и `*-filters` игнорируются
-
-### 0.6.23 – 0.6.25
-
-- **п. 5** — поддержка **v1 и v2** (выбор 1 / 2 / обе); размер существующего `rkn.list` в КБ вместо подсчёта строк
-- **п. 5** — вставка в `MODE_LIST` через **awk** (CRLF, пустые кавычки, пробелы)
-- **п. 10** — очистка дубликатов `dpi-detector` (`/tmp`, `/opt/root`) перед запуском / после установки
-
-### 0.6.22
-
-- **п. 8** — только IPv4; пропуск битых доменов (`..`, ведущая `.`); один IP на домен; предупреждение при &gt;64 записей (лимит Keenetic)
-- **hosts** — исправлены `objects.githubusercontent.com`, `my.telegram.org`; убраны IPv6 и дубли discord
-
-### 0.6.19 – 0.6.21
-
-- **п. 3** — при применении стратегии: нормализация **CRLF → LF** в скачанном `.conf` (иначе `S51nfqws2` падает с `: not found` / битыми портами iptables)
-- **ISP_INTERFACE** — при разборе значения из конфига удаляются `\r` и кавычки (исправлен «съехавший» вывод `[+]` → `"+]`)
-- **п. 8** — **Обновление hosts**: секции из `hosts` в репозитории → `ndmc ip host` / удаление (`no ip host`) + save
-
-### 0.6.18
-
-- **п. 7** — ускорен разбор конфига: один проход `awk` вместо shell+grep на каждую строку
-
-### 0.6.16 – 0.6.17
-
-- **п. 5** — если `rkn.list` уже есть, спрашивает об обновлении (по умолчанию **Нет**)
-- **п. 5** — перезапуск `S51nfqws2` только при изменениях (список и/или `MODE_LIST`)
-
-### 0.6.15
-
-- Базовая линейка 0.6.x (см. ниже)
-
-### 0.6.x (основные изменения относительно 0.5.x)
-
-- **п. 5** — загрузка **rkn.list** (125k+ доменов, zapret4rocket) + автодобавление в `MODE_LIST`
-- **п. 7** — смена активных **fake:blob** (локальные + из репозитория)
-- **п. 8** — **Обновление hosts** через `ndmc`
-- **п. 15** — **MagiTrickle** (установка/обновление/удаление)
-- **п. 15** — **telemt / telemt-panel**; **п. 16** — **TG WS Proxy Rust**
-- **S / U** — UPX, Dropbear fix, opkg upgrade
-- **п. 8** — Управление DoT/DoH: пресеты Xbox-DNS / NullsProxy / Supercell и др.
-- **SHA256** blobs + список стратегий из SUMS; CDN/offline-кэш; fallback через VPN-туннели
-- Нумерация (0.8.x): 1 = install, 2–8 = стратегии/списки, 10–16 = утилиты
-- Статус: magitrickle / telemt / tg-ws-proxy-rs; метка **⭡** при новой версии
-- Без принудительного `export LD_LIBRARY_PATH` (совместимость ndmc / Entware wget)
-- Обычный `read` в меню (без `stty` / принудительного erase)
-
-### 0.5.17
-
-- **usque-keenetic** (п. 14) — установка/обновление; удаление в п. 88
-
-### 0.5.16
-
-- **DNS-счётчик** — только секция System; Policy0/1 и `proxy-*-filters` не учитываются
-
-### 0.5.14 – 0.5.15
-
-- Счётчик DoT/DoH по слотам (записи `server-tls` / `server-https`), а не по уникальным targets
-- Ужесточён парсер `show dns-proxy`
-
-### 0.5.13
-
-- **LD_LIBRARY_PATH / ndmc_cli** — OPKG-путь по умолчанию; `ndmc` через системные библиотеки (как у spatiumstas)
-
-### 0.5.11 – 0.5.12
-
-- **TG WS Proxy Go** (п. 13) — установка/обновление через feedly
-- Удаление `tg-ws-proxy` в п. 88 (+ опционально `feedly.conf`)
-
-### 0.4.0 → 0.5.x
-
-- **Управление DoT/DoH** через `ndmc`
-- Утилиты: awg-manager, KeenKit; удаление — п. 88
-- Быстрый запуск `menu`, статус только установленного, ⚡, кэш opkg/процессов
-- Переключение языка (п. 77)
+- **Определение ОС** — OpenWrt / ImmortalWrt / Keenetic / Netcraze / Padavan / generic; переменные платформы (пути, статус opkg, фиды), модель/версия из `/tmp/sysinfo/model` и `/etc/openwrt_release`
+- **Пакеты** — нативный фид `https://nfqws.github.io/<repo>/openwrt` с GPG-ключом; поддержка `apk` (OpenWrt 25.x: `packages.adb` в `/etc/apk/repositories.d`, `.pem` в `/etc/apk/keys`); обёртки `pkg_update/install/remove` над opkg/apk
+- **Пути** — все конфиги/сервисы/списки через `CONF_BASE_DIR`/`INIT_BASE_DIR`; сервисы procd `nfqws-keenetic` / `nfqws2-keenetic`; sed-подмена `/opt/etc/nfqws*` → `/etc/nfqws*` при применении стратегий
+- **П. 7 (hosts)** — на OpenWrt блок-маркеры в `/etc/hosts` + reload dnsmasq (на Keenetic — `ndmc ip host`)
+- **П. 8 (DoT/DoH)** — на OpenWrt менеджер `https-dns-proxy` (uci) + привязки доменов через dnsmasq per-domain
+- **П. 5 (DoT/DoH-стратегия)** — полностью работает на OpenWrt (ndmc-привязки пропускаются)
+- **Web** — нативная установка `nfqws-keenetic-web` из фида `.../openwrt`
+- **Утилиты** — dpi-detector (`/usr/local/bin`), MagiTrickle (нативный пакет), tg-ws-proxy-rs (OpenWrt/LuCI-ветка установщика); awg-manager / usque / telemt / opera-proxy — предупреждение «только Entware»
+- **Keenetic-only функции** (KeenKit, ndmc-меню) скрыты/подсвечены предупреждением
+- **Совместимость busybox ash** (проверено на устройстве OpenWrt 24.10): без переносов строк с операторами `||`/`&&`/`|` в начале продолжения; обновление скрипта (п. 99) и стратегии качаются из этого форка
 
 ---
 
 ## Структура репозитория
 
 ```
-nfqws-menu/
+nfqws-menu-openwrt/
 ├── nfqws-menu.sh          # Главный скрипт меню
-├── hosts                  # Секции IP DOMAIN для п. 8 (ndmc ip host)
+├── installer_usque.sh     # Установщик usque-keenetic (Entware)
+├── installer_telemt.sh    # Установщик telemt / telemt-panel (Entware)
+├── menu-dns.sh            # DNS-менеджер (Keenetic / ndmc)
+├── hosts                  # Секции IP DOMAIN для п. 7
 ├── SHA256SUMS             # Хеши файлов репозитория (список стратегий без API)
 ├── README.md
 ├── .github/workflows/
@@ -627,13 +490,21 @@ nfqws-menu/
 ### Как добавить свою стратегию
 
 1. Файл `имя.conf` в `strategies/nfqws1/` или `strategies/nfqws2/`.
-2. Полный конфиг (`ISP_INTERFACE=`, `NFQWS_ARGS=` / `NFQWS_BASE_ARGS=` и т.д.).
+2. Полный конфиг (`ISP_INTERFACE=`, `NFQWS_ARGS=` / `NFQWS_BASE_ARGS=` и т.д.). Пути blob/list-файлов можно писать в Entware-форме (`/opt/etc/nfqws/…`) — на OpenWrt они будут переписаны автоматически.
 3. При необходимости — `.bin` в `strategies/blobs/`, списки в `strategies/lists/`.
 4. После push workflow обновит `SHA256SUMS` / `strategies/blobs/SHA256SUMS`; скрипт подхватит стратегию из SUMS (или через GitHub API).
 
 ---
 
-## Требования (Keenetic / Netcraze)
+## Требования
+
+### OpenWrt
+
+1. OpenWrt 23.05+ (opkg) или 25.x+ (apk); ImmortalWrt — тоже работает.
+2. Модули NFQUEUE: `kmod-nft-queue` (fw4 / nftables, 22.03+) или `kmod-ipt-nfqueue` + `iptables-mod-nfqueue` (fw3). Меню предупреждает, если их нет.
+3. Для веб-интерфейса ничего дополнительно ставить не нужно — пакет придёт с фидом.
+
+### Keenetic / Netcraze
 
 1. Установлен **Entware** (внутренняя память или USB).
 2. В веб-интерфейсе — **модули ядра Netfilter** (`OPKG → Kernel modules for Netfilter`).\
@@ -644,6 +515,35 @@ nfqws-menu/
 ---
 
 ## Полезные команды вручную
+
+OpenWrt:
+
+```bash
+# Статус сервисов
+service nfqws-keenetic status          # v1
+service nfqws2-keenetic status         # v2
+/etc/init.d/magitrickle status         # MagiTrickle
+/etc/init.d/tg-ws-proxy-rs status      # TG WS Proxy Rust
+
+# Перезапуск
+service nfqws-keenetic restart
+service nfqws2-keenetic restart
+
+# Информация о пакете
+opkg info nfqws-keenetic               # или apk info nfqws-keenetic (25.x+)
+
+# Конфиги
+vi /etc/nfqws/nfqws.conf
+vi /etc/nfqws2/nfqws2.conf
+
+# Привязки доменов DNS (п. 8, https-dns-proxy)
+uci show https-dns-proxy
+
+# Быстрый запуск меню
+menu
+```
+
+Keenetic / Netcraze (Entware):
 
 ```bash
 # Статус сервисов
@@ -656,20 +556,10 @@ nfqws-menu/
 # Порт веб-интерфейса
 netstat -lnt | grep ':90'
 
-# Перезапуск
-/opt/etc/init.d/S51nfqws restart
-/opt/etc/init.d/S51nfqws2 restart
-/opt/etc/init.d/S99tg-ws-proxy-rs restart
-/opt/etc/init.d/S51usque restart
-/opt/etc/init.d/S99magitrickle restart
-
 # Информация о пакете
 opkg info nfqws-keenetic
 opkg info nfqws2-keenetic
 opkg info nfqws-keenetic-web
-opkg info tg-ws-proxy-rs   # если установлен как пакет
-opkg info usque-keenetic
-opkg info magitrickle
 
 # Конфиги
 vi /opt/etc/nfqws/nfqws.conf
@@ -680,8 +570,6 @@ vi /opt/etc/usque/usque.conf
 
 # Интерфейс провайдера
 ip route | grep ^default
-# или
-route | grep ^default
 
 # DNS-proxy (DoT/DoH)
 ndmc -c show dns-proxy
@@ -699,4 +587,5 @@ menu
 
 Стратегии адаптированы на основе [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube),\
 подготовлены [@Nare51](https://github.com/Nare51) с использованием искусственного интеллекта.\
-Официальные пакеты NFQWS: [nfqws](https://github.com/nfqws).
+Официальные пакеты NFQWS: [nfqws](https://github.com/nfqws).\
+База меню: [rndnaame/nfqws-menu](https://github.com/rndnaame/nfqws-menu); адаптация под OpenWrt: [@Dea1hwa1cher](https://github.com/Dea1hwa1cher).
