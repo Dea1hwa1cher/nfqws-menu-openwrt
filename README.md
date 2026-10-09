@@ -67,6 +67,15 @@ menu
 
 Стратегии при применении автоматически переписывают пути blob/list-файлов под префикс пакета.
 
+Сторонние утилиты на OpenWrt:
+
+| Утилита | OpenWrt |
+| --- | --- |
+| 10. dpi-detector | ставится нативно (бинарь в `/usr/local/bin`) |
+| 14. MagiTrickle | нативный пакет (opkg/apk-фид, сервис `/etc/init.d/magitrickle`) |
+| 16. tg-ws-proxy-rs | нативная ветка установщика (LuCI, `/usr/bin`, `/etc/init.d/tg-ws-proxy-rs`) |
+| 11. awg-manager, 13. usque, 15. telemt, o. opera-proxy | только Entware — в меню выводится предупреждение |
+
 ---
 
 ## Что делает меню

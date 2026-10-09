@@ -1387,7 +1387,7 @@ show_installed() {
     extras="${extras}tool|tg-ws-proxy-rs|${rs_ver:-ok}|tg-ws-proxy-rs
 "
   fi
-  if [ -x /opt/bin/dpi-detector ] || command -v dpi-detector >/dev/null 2>&1; then
+  if [ -x "$(dpi_detector_bin)" ] || command -v dpi-detector >/dev/null 2>&1; then
     dpi_ver=$(dpi_detector_version 2>/dev/null) || dpi_ver="ok"
     extras="${extras}tool|dpi-detector|${dpi_ver:-ok}|
 "
@@ -4905,10 +4905,20 @@ DPI_DETECTOR_INSTALL_URL="https://raw.githubusercontent.com/Runnin4ik/dpi-detect
 AWG_MANAGER_INSTALL_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh"
 KEENKIT_INSTALL_URL="https://raw.githubusercontent.com/spatiumstas/KeenKit/main/install.sh"
 
+# dpi-detector сам выбирает каталог: /opt/bin (Entware/Keenetic) или
+# /usr/local/bin (OpenWrt — персистентный overlay)
+dpi_detector_bin() {
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    echo "/usr/local/bin/dpi-detector"
+  else
+    echo "/opt/bin/dpi-detector"
+  fi
+}
+
 cleanup_dpi_detector_dupes() {
   local primary="" f
-  if [ -x /opt/bin/dpi-detector ]; then
-    primary="/opt/bin/dpi-detector"
+  if [ -x "$(dpi_detector_bin)" ]; then
+    primary=$(dpi_detector_bin)
   elif command -v dpi-detector >/dev/null 2>&1; then
     primary=$(command -v dpi-detector)
   fi
@@ -4921,16 +4931,16 @@ cleanup_dpi_detector_dupes() {
 }
 
 menu_dpi_detector() {
-  if [ -x /opt/bin/dpi-detector ]; then
+  if [ -x "$(dpi_detector_bin)" ]; then
     echo
     info "Открываем: 10. dpi-detector"
-    info "Локально: /opt/bin/dpi-detector"
+    info "Локально: $(dpi_detector_bin)"
     printf '%s\n' "================================================"
     cleanup_dpi_detector_dupes
     if [ -c /dev/tty ]; then
-      /opt/bin/dpi-detector </dev/tty
+      "$(dpi_detector_bin)" </dev/tty
     else
-      /opt/bin/dpi-detector
+      "$(dpi_detector_bin)"
     fi
     return 0
   fi
@@ -4938,19 +4948,20 @@ menu_dpi_detector() {
   echo
   info "Очистка дубликатов dpi-detector (/tmp, /opt/root)..."
   cleanup_dpi_detector_dupes
-  if [ -x /opt/bin/dpi-detector ]; then
-    info "Запуск /opt/bin/dpi-detector ..."
+  if [ -x "$(dpi_detector_bin)" ]; then
+    info "Запуск $(dpi_detector_bin) ..."
     if [ -c /dev/tty ]; then
-      /opt/bin/dpi-detector </dev/tty
+      "$(dpi_detector_bin)" </dev/tty
     else
-      /opt/bin/dpi-detector
+      "$(dpi_detector_bin)"
     fi
   else
-    warn "Бинарник /opt/bin/dpi-detector не найден — запуск пропущен."
+    warn "Бинарник $(dpi_detector_bin) не найден — запуск пропущен."
   fi
 }
 
 menu_awg_manager() {
+  require_entware || return 1
   run_menu_remote_sh "11" "awg-manager" "$AWG_MANAGER_INSTALL_URL" || return 1
 }
 
@@ -4980,14 +4991,23 @@ menu_keenkit() {
 # сети, подбор параметров под неё и проверку, что выданная ссылка работает
 # целиком, а не «порт открыт».
 
-TG_WS_PROXY_RS_BIN="/opt/bin/tg-ws-proxy-rs"
-TG_WS_PROXY_RS_INIT="/opt/etc/init.d/S99tg-ws-proxy-rs"
-TG_WS_PROXY_RS_CONF_DIR="/opt/etc/tg-ws-proxy-rs"
+# Пути install.sh tg-ws-proxy-rs: OpenWrt — /usr/bin + /etc/init.d + /etc/tg-ws-proxy-rs;
+# Entware — /opt/bin + S99-init + /opt/etc/tg-ws-proxy-rs (тот же лейаут конфигов).
+if [ "$ROUTER_OS" = "openwrt" ]; then
+  TG_WS_PROXY_RS_BIN="/usr/bin/tg-ws-proxy-rs"
+  TG_WS_PROXY_RS_INIT="/etc/init.d/tg-ws-proxy-rs"
+  TG_WS_PROXY_RS_CONF_DIR="/etc/tg-ws-proxy-rs"
+  TG_WS_PROXY_RS_LOG="/var/log/tg-ws-proxy-rs.log"
+else
+  TG_WS_PROXY_RS_BIN="/opt/bin/tg-ws-proxy-rs"
+  TG_WS_PROXY_RS_INIT="/opt/etc/init.d/S99tg-ws-proxy-rs"
+  TG_WS_PROXY_RS_CONF_DIR="/opt/etc/tg-ws-proxy-rs"
+  TG_WS_PROXY_RS_LOG="/opt/var/log/tg-ws-proxy-rs.log"
+fi
 TG_WS_PROXY_RS_CONF="$TG_WS_PROXY_RS_CONF_DIR/config.conf"
 TG_WS_PROXY_RS_SECRET="$TG_WS_PROXY_RS_CONF_DIR/secret.conf"
 TG_WS_PROXY_GO_CONF_DIR="/opt/etc/tg-ws-proxy"
 TG_WS_PROXY_GO_INIT="/opt/etc/init.d/S99tg-ws-proxy"
-TG_WS_PROXY_RS_LOG="/opt/var/log/tg-ws-proxy-rs.log"
 TG_WS_PROXY_RS_REPO="valnesfjord/tg-ws-proxy-rs"
 TG_WS_PROXY_RS_DC_TARGETS="2:149.154.167.220,4:149.154.167.220"
 TG_WS_PROXY_RS_TOP_DOMAINS=4
@@ -5237,12 +5257,14 @@ tg_ws_proxy_rs_install() {
   fi
   tg_ws_proxy_rs_ensure_secret || return 1
   info "Установка из релиза…"
-  # --platform entware: у установщика отдельная ветка для OpenWrt/LuCI, а на
-  # Keenetic нужен путь Entware (/opt + rc.unslung).
+  # --platform задаём явно: у установщика ветки OpenWrt/LuCI и Entware (/opt +
+  # rc.unslung), автодетект тоже работает, но детерминизм важнее.
   # Вывод показываем под отступом и без строк, которые дальше повторяет меню:
   # ссылку оно печатает само (и только после проверки связи), а «Rollback
   # backup» дублирует «Backup» тем же путём.
-  out=$(sh "$script" --platform entware $upx_arg 2>&1)
+  local plat="entware"
+  [ "$ROUTER_OS" = "openwrt" ] && plat="openwrt"
+  out=$(sh "$script" --platform "$plat" $upx_arg 2>&1)
   rc=$?
   rm -f "$script"
   # Инсталлер красит вывод ANSI-кодами, поэтому сначала снимаем цвет (меню
@@ -5632,6 +5654,7 @@ remove_tg_ws_proxy_rs() {
 USQUE_INSTALL_URL="https://raw.githubusercontent.com/rndnaame/nfqws-menu/main/installer_usque.sh"
 
 menu_usque_keenetic() {
+  require_entware || return 1
   # min=2000: installer_usque.sh ~5 КБ
   if ! run_menu_remote_sh "13" "usque-keenetic" "$USQUE_INSTALL_URL" 2000; then
     error "Установщик usque-keenetic завершился с ошибкой."
@@ -5645,15 +5668,23 @@ menu_magitrickle() {
   info "MagiTrickle"
   refresh_opkg_cache
 
+  local mag_init
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    # нативный OpenWrt-пакет (procd); add_repo.sh сам умеет opkg/apk
+    mag_init="/etc/init.d/magitrickle"
+  else
+    mag_init="/opt/etc/init.d/S99magitrickle"
+  fi
+
   if is_installed "magitrickle"; then
     info "Пакет установлен — обновление..."
     pkg_update
     pkg_install magitrickle
-    if [ -x /opt/etc/init.d/S99magitrickle ]; then
-      /opt/etc/init.d/S99magitrickle restart
-      info "Сервис перезапущен: /opt/etc/init.d/S99magitrickle restart"
+    if [ -x "$mag_init" ]; then
+      "$mag_init" restart
+      info "Сервис перезапущен: $mag_init restart"
     else
-      warn "Init-скрипт /opt/etc/init.d/S99magitrickle не найден."
+      warn "Init-скрипт $mag_init не найден."
     fi
     info "Обновление завершено."
   else
@@ -5670,19 +5701,19 @@ menu_magitrickle() {
     fi
     pkg_update
     pkg_install magitrickle
-    if [ -x /opt/etc/init.d/S99magitrickle ]; then
-      /opt/etc/init.d/S99magitrickle start
-      info "Сервис запущен: /opt/etc/init.d/S99magitrickle start"
+    if [ -x "$mag_init" ]; then
+      "$mag_init" start
+      info "Сервис запущен: $mag_init start"
     else
-      warn "Init-скрипт /opt/etc/init.d/S99magitrickle не найден."
+      warn "Init-скрипт $mag_init не найден."
     fi
     info "Установка завершена."
   fi
 
   echo
   printf '%s\n' "${BOLD}Управление сервисом${NC}"
-  cat << 'EOF'
-/opt/etc/init.d/S99magitrickle (start | stop | restart | status)
+  cat << EOF
+$mag_init (start | stop | restart | status)
 EOF
 }
 
@@ -5715,6 +5746,7 @@ remove_telemt() {
 }
 
 menu_telemt() {
+  require_entware || return 1
   run_menu_remote_sh "15" "telemt / telemt-panel" "$TELEMT_BUNDLE_URL" 2000 || return 1
 }
 
@@ -5755,13 +5787,13 @@ remove_backups() {
 }
 
 is_dpi_detector_installed() {
-  [ -x /opt/bin/dpi-detector ] || command -v dpi-detector >/dev/null 2>&1
+  [ -x "$(dpi_detector_bin)" ] || command -v dpi-detector >/dev/null 2>&1
 }
 
 dpi_detector_version() {
   local bin
-  if [ -x /opt/bin/dpi-detector ]; then
-    bin="/opt/bin/dpi-detector"
+  if [ -x "$(dpi_detector_bin)" ]; then
+    bin=$(dpi_detector_bin)
   elif command -v dpi-detector >/dev/null 2>&1; then
     bin=$(command -v dpi-detector)
   else
@@ -5772,7 +5804,7 @@ dpi_detector_version() {
 }
 
 remove_dpi_detector() {
-  local paths="/opt/bin/dpi-detector /tmp/dpi-detector" f found=0
+  local paths="$(dpi_detector_bin) /tmp/dpi-detector" f found=0
   [ -n "$HOME" ] && paths="$paths $HOME/dpi-detector"
   for f in $paths; do
     [ -f "$f" ] && rm -f "$f" && info "  удалён: $f" && found=1
@@ -5818,17 +5850,21 @@ remove_keenkit() {
 }
 
 remove_magitrickle() {
+  local mag_init="/opt/etc/init.d/S99magitrickle"
+  [ "$ROUTER_OS" = "openwrt" ] && mag_init="/etc/init.d/magitrickle"
   if is_installed "magitrickle"; then
-    [ -x /opt/etc/init.d/S99magitrickle ] && /opt/etc/init.d/S99magitrickle stop 2>/dev/null || true
+    [ -x "$mag_init" ] && "$mag_init" stop 2>/dev/null || true
     pkg_remove magitrickle 2>/dev/null || true
     info "magitrickle удалён."
   else
     warn "magitrickle не установлен."
   fi
-  if [ -f /opt/etc/opkg/magitrickle.conf ]; then
+  local repo_conf="/opt/etc/opkg/magitrickle.conf"
+  [ "$ROUTER_OS" = "openwrt" ] && repo_conf="/etc/opkg/magitrickle.conf"
+  if [ -f "$repo_conf" ]; then
     echo
-    if confirm_no "Удалить репозиторий MagiTrickle (/opt/etc/opkg/magitrickle.conf)?"; then
-      rm -f /opt/etc/opkg/magitrickle.conf && info "  удалён: /opt/etc/opkg/magitrickle.conf"
+    if confirm_no "Удалить репозиторий MagiTrickle ($repo_conf)?"; then
+      rm -f "$repo_conf" && info "  удалён: $repo_conf"
     else
       info "Репозиторий MagiTrickle оставлен."
     fi
@@ -6346,8 +6382,8 @@ opkg_upgrade_all() {
   info "Обновление пакетов завершено."
 
   # dpi-detector ставится не через opkg — обновляем отдельно, если уже установлен
-  if [ -x /opt/bin/dpi-detector ]; then
-    info "Найден /opt/bin/dpi-detector — обновление..."
+  if [ -x "$(dpi_detector_bin)" ]; then
+    info "Найден $(dpi_detector_bin) — обновление..."
     if run_remote_sh "${DPI_DETECTOR_INSTALL_URL:-https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh}"; then
       info "dpi-detector обновлён."
     else
@@ -6512,6 +6548,7 @@ MENU_OPERA_PATH="/opt/menu-opera.sh"
 MENU_OPERA_URL="https://raw.githubusercontent.com/rndnaame/opera-proxy/main/menu-opera.sh"
 
 menu_opera_hidden() {
+  require_entware || return 1
   local dest="$MENU_OPERA_PATH"
   if [ ! -f "$dest" ]; then
     info "Скачивание menu-opera.sh..."
@@ -6801,6 +6838,14 @@ read_choice() {
 require_keenetic() {
   if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
     warn "Пункт доступен только на Keenetic/Netcraze OS (использует ndmc)."
+    return 1
+  fi
+  return 0
+}
+
+require_entware() {
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    warn "Установщик рассчитан на Entware (Keenetic/Netcraze) — нативной OpenWrt-сборки у этого инструмента нет."
     return 1
   fi
   return 0
