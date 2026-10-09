@@ -32,6 +32,7 @@ WGET_TIMEOUT=20
 # Нужно при запуске через CLI Keenetic (exec sh / telnet) и OPKG hooks,
 # где LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib:/lib:/usr/lib.
 ndmc_cli() {
+  command -v ndmc >/dev/null 2>&1 || return 1
   # системные libs первыми; иначе ndmc тянет OpenSSL из Entware → system failed
   LD_LIBRARY_PATH=/lib:/usr/lib command ndmc -c "$@"
 }
@@ -55,15 +56,193 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Язык UI  (/opt/etc/nfqws-menu/nfqws-menu.lang, env NFQWS_MENU_LANG / NFQWS_MENU_UTF8)
-# Миграция со старого пути /opt/etc/nfqws-menu.lang
-# Авто: SSH → ru, иначе en
+# Платформа и операционная система (OpenWrt / Keenetic / Padavan / Linux)
 # ---------------------------------------------------------------------------
-UI_LANG_FILE="/opt/etc/nfqws-menu/nfqws-menu.lang"
-if [ ! -f "$UI_LANG_FILE" ] && [ -f /opt/etc/nfqws-menu.lang ]; then
-  mkdir -p /opt/etc/nfqws-menu 2>/dev/null || true
-  mv /opt/etc/nfqws-menu.lang "$UI_LANG_FILE" 2>/dev/null || \
-    cp /opt/etc/nfqws-menu.lang "$UI_LANG_FILE" 2>/dev/null || true
+ROUTER_OS=""        # openwrt | keenetic | padavan | generic
+ROUTER_OS_NAME=""   # OpenWrt, ImmortalWrt, KeeneticOS, Linux
+ROUTER_OS_VER=""    # 23.05.2, 5.1.5, ...
+ROUTER_MODEL=""     # Модель роутера
+ROUTER_TITLE=""     # Версия/заголовок для строки меню
+ROUTER_TARGET=""    # ramips/mt7621, mediatek/filogic, etc.
+ROUTER_FW_TYPE="unknown"   # fw4 (nftables) | fw3 (iptables) | iptables | unknown
+OS_HAS_NF_QUEUE=""  # 1=модули NFQUEUE есть/загружены, 0=нет, ""=не определено
+OS_CHECKED=0
+RCI_CHECKED=0
+RCI_HAS_NF_KMOD=""
+DISTRIB_ARCH_VAL=""
+
+CONF_BASE_DIR="/opt/etc"
+INIT_BASE_DIR="/opt/etc/init.d"
+BIN_BASE_DIR="/opt/bin"
+STATUS_FILE="/opt/lib/opkg/status"
+OPKG_CONF_DIR="/opt/etc/opkg"
+
+# RCI show/version для Keenetic (один раз за сессию)
+_rci_fetch() {
+  local json
+  [ "$RCI_CHECKED" = "1" ] && return 0
+  RCI_CHECKED=1
+  json=$(curl -s --connect-timeout 2 --max-time 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null) \
+    || json=$(wget -qO- -T 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null) \
+    || json=""
+  [ -n "$json" ] || return 0
+
+  ROUTER_MODEL=$(printf '%s' "$json" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  ROUTER_TITLE=$(printf '%s' "$json" | sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if printf '%s' "$json" | grep -q 'opkg-kmod-netfilter'; then
+    RCI_HAS_NF_KMOD=1
+  else
+    RCI_HAS_NF_KMOD=0
+  fi
+}
+
+detect_os() {
+  [ "$OS_CHECKED" = "1" ] && return 0
+  OS_CHECKED=1
+
+  # 1) OpenWrt / ImmortalWrt / forks
+  if [ -f /etc/openwrt_release ] || [ -f /etc/openwrt_version ]; then
+    ROUTER_OS="openwrt"
+  elif [ -f /etc/os-release ] && grep -qiE 'ID(_LIKE)?=.*(openwrt|immortalwrt)' /etc/os-release 2>/dev/null; then
+    ROUTER_OS="openwrt"
+  elif command -v uci >/dev/null 2>&1 && [ -d /etc/config ]; then
+    ROUTER_OS="openwrt"
+  # 2) Keenetic / Netcraze OS
+  elif command -v ndmc >/dev/null 2>&1 || [ -f /opt/etc/entware_release ]; then
+    ROUTER_OS="keenetic"
+  # 3) Padavan
+  elif [ -f /etc/padavan_version ] || (command -v nvram >/dev/null 2>&1 && nvram get productid >/dev/null 2>&1); then
+    ROUTER_OS="padavan"
+  else
+    # Проверка RCI Keenetic (порт 79)
+    local rci_test
+    rci_test=$(curl -s --connect-timeout 1 --max-time 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null \
+      || wget -qO- -T 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null \
+      || true)
+    if [ -n "$rci_test" ] && printf '%s' "$rci_test" | grep -q '"model"'; then
+      ROUTER_OS="keenetic"
+    else
+      ROUTER_OS="generic"
+    fi
+  fi
+
+  case "$ROUTER_OS" in
+    openwrt)
+      local id release rev target arch desc
+      if [ -f /etc/openwrt_release ]; then
+        id=$(sed -n "s/^DISTRIB_ID=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
+        release=$(sed -n "s/^DISTRIB_RELEASE=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
+        rev=$(sed -n "s/^DISTRIB_REVISION=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
+        target=$(sed -n "s/^DISTRIB_TARGET=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
+        arch=$(sed -n "s/^DISTRIB_ARCH=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
+        desc=$(sed -n "s/^DISTRIB_DESCRIPTION=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
+      fi
+      ROUTER_OS_NAME="${id:-OpenWrt}"
+      ROUTER_OS_VER="${release:-}"
+      ROUTER_TARGET="${target:-}"
+      DISTRIB_ARCH_VAL="${arch:-}"
+      if [ -n "$release" ]; then
+        ROUTER_TITLE="$ROUTER_OS_NAME $release"
+      elif [ -n "$rev" ]; then
+        ROUTER_TITLE="$ROUTER_OS_NAME $rev"
+      else
+        ROUTER_TITLE="$ROUTER_OS_NAME"
+      fi
+
+      # Определение модели оборудования в OpenWrt
+      if [ -f /tmp/sysinfo/model ]; then
+        ROUTER_MODEL=$(cat /tmp/sysinfo/model 2>/dev/null | tr -d '\r\n')
+      elif [ -f /proc/device-tree/model ]; then
+        ROUTER_MODEL=$(tr -d '\0\r\n' < /proc/device-tree/model 2>/dev/null)
+      elif command -v ubus >/dev/null 2>&1; then
+        ROUTER_MODEL=$(ubus call system board 2>/dev/null | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+      fi
+      [ -z "$ROUTER_MODEL" ] && [ -n "$desc" ] && ROUTER_MODEL="$desc"
+      [ -z "$ROUTER_MODEL" ] && ROUTER_MODEL="OpenWrt Device"
+
+      # Определение подсистемы фаервола OpenWrt
+      if [ -x /sbin/fw4 ] || command -v nft >/dev/null 2>&1; then
+        ROUTER_FW_TYPE="fw4"
+      elif [ -x /sbin/fw3 ] || command -v iptables >/dev/null 2>&1; then
+        ROUTER_FW_TYPE="fw3"
+      fi
+
+      # Проверка наличия модулей NFQUEUE в ядре OpenWrt
+      if lsmod 2>/dev/null | grep -qE 'nft_queue|xt_NFQUEUE|ipt_NFQUEUE|nfnetlink_queue'; then
+        OS_HAS_NF_QUEUE=1
+      elif [ -r /proc/net/netfilter/nfnetlink_queue ]; then
+        OS_HAS_NF_QUEUE=1
+      elif [ -r /usr/lib/opkg/status ] && grep -qE '^Package:[[:space:]]*kmod-(nft-queue|ipt-nfqueue)' /usr/lib/opkg/status 2>/dev/null; then
+        OS_HAS_NF_QUEUE=1
+      else
+        OS_HAS_NF_QUEUE=0
+      fi
+
+      CONF_BASE_DIR="/etc"
+      INIT_BASE_DIR="/etc/init.d"
+      BIN_BASE_DIR="/usr/bin"
+      STATUS_FILE="/usr/lib/opkg/status"
+      OPKG_CONF_DIR="/etc/opkg"
+      ;;
+
+    keenetic)
+      ROUTER_OS_NAME="KeeneticOS"
+      CONF_BASE_DIR="/opt/etc"
+      INIT_BASE_DIR="/opt/etc/init.d"
+      BIN_BASE_DIR="/opt/bin"
+      STATUS_FILE="/opt/lib/opkg/status"
+      OPKG_CONF_DIR="/opt/etc/opkg"
+      ROUTER_FW_TYPE="iptables"
+      _rci_fetch
+      OS_HAS_NF_QUEUE="$RCI_HAS_NF_KMOD"
+      ;;
+
+    padavan)
+      ROUTER_OS_NAME="Padavan"
+      CONF_BASE_DIR="/opt/etc"
+      INIT_BASE_DIR="/opt/etc/init.d"
+      BIN_BASE_DIR="/opt/bin"
+      STATUS_FILE="/opt/lib/opkg/status"
+      OPKG_CONF_DIR="/opt/etc/opkg"
+      ROUTER_FW_TYPE="iptables"
+      OS_HAS_NF_QUEUE=1
+      ROUTER_MODEL=$(nvram get productid 2>/dev/null || echo "Padavan Device")
+      ROUTER_TITLE=$(cat /etc/padavan_version 2>/dev/null || echo "Padavan")
+      ;;
+
+    generic|*)
+      ROUTER_OS="generic"
+      ROUTER_OS_NAME="Linux"
+      if [ -f /etc/os-release ]; then
+        ROUTER_OS_NAME=$(sed -n "s/^NAME=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/os-release 2>/dev/null | head -1)
+        ROUTER_OS_VER=$(sed -n "s/^VERSION_ID=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/os-release 2>/dev/null | head -1)
+      fi
+      ROUTER_TITLE="${ROUTER_OS_NAME}${ROUTER_OS_VER:+ $ROUTER_OS_VER}"
+      ROUTER_MODEL=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || uname -n 2>/dev/null || echo "Linux Device")
+      CONF_BASE_DIR="/etc"
+      INIT_BASE_DIR="/etc/init.d"
+      BIN_BASE_DIR="/usr/bin"
+      STATUS_FILE="/usr/lib/opkg/status"
+      OPKG_CONF_DIR="/etc/opkg"
+      ;;
+  esac
+}
+
+detect_os
+
+# ---------------------------------------------------------------------------
+# Язык UI (${CONF_BASE_DIR}/nfqws-menu/nfqws-menu.lang, env NFQWS_MENU_LANG / NFQWS_MENU_UTF8)
+# ---------------------------------------------------------------------------
+UI_LANG_FILE="${CONF_BASE_DIR}/nfqws-menu/nfqws-menu.lang"
+if [ ! -f "$UI_LANG_FILE" ]; then
+  if [ -f "${CONF_BASE_DIR}/nfqws-menu.lang" ]; then
+    mkdir -p "${CONF_BASE_DIR}/nfqws-menu" 2>/dev/null || true
+    mv "${CONF_BASE_DIR}/nfqws-menu.lang" "$UI_LANG_FILE" 2>/dev/null || \
+      cp "${CONF_BASE_DIR}/nfqws-menu.lang" "$UI_LANG_FILE" 2>/dev/null || true
+  elif [ "$ROUTER_OS" = "openwrt" ] && [ -f /opt/etc/nfqws-menu/nfqws-menu.lang ]; then
+    mkdir -p "${CONF_BASE_DIR}/nfqws-menu" 2>/dev/null || true
+    cp /opt/etc/nfqws-menu/nfqws-menu.lang "$UI_LANG_FILE" 2>/dev/null || true
+  fi
 fi
 
 ui_detect_default_lang() {
@@ -203,7 +382,7 @@ menu_change_language() {
   else
     ui_apply_lang "ru"
   fi
-  mkdir -p /opt/etc/nfqws-menu 2>/dev/null || true
+  mkdir -p "$(dirname "$UI_LANG_FILE")" 2>/dev/null || true
   echo "$UI_LANG" > "$UI_LANG_FILE" 2>/dev/null || true
 }
 
@@ -729,21 +908,18 @@ backup_file() {
 # ---------------------------------------------------------------------------
 # Архитектура / модель (кэш)
 # ---------------------------------------------------------------------------
+# Архитектура / модель (кэш)
+# ---------------------------------------------------------------------------
 ARCH=""
 ARCH_RAW=""
-ARCH_SOURCE=""   # opkg | conf | uname | ""
-ROUTER_MODEL=""
-ROUTER_TITLE=""  # title из RCI, напр. 5.1.5
-RCI_CHECKED=0
-RCI_HAS_NF_KMOD=""  # 1=есть opkg-kmod-netfilter в components, 0=нет, ""=RCI недоступен
+ARCH_SOURCE=""   # opkg | conf | openwrt_release | uname | ""
 
-# Нормализация сырого идентификатора → ARCH (mipsel|mips|aarch64|x86_64|x86).
+# Нормализация сырого идентификатора → ARCH (mipsel|mips|aarch64|armv7|x86_64|x86).
 # Пустой результат = не распознано. mipsel* / mipselsf* проверяются ДО mips*.
 _arch_normalize() {
   case "$1" in
     aarch64*|arm64*)                    echo "aarch64" ;;
-    # 32-bit ARM: в репозиториях nfqws обычно нет отдельной ветки
-    armv7*|armv6*|arm*)                 echo "" ;;
+    armv7*|armv6*|arm*|armhf*)          echo "armv7" ;;
     mipsel*|mipselsf*|mips64el*)        echo "mipsel" ;;
     mips*|mipssf*)                      echo "mips" ;;
     x86_64*|amd64*|x64*)                echo "x86_64" ;;
@@ -761,6 +937,7 @@ _arch_pick_best() {
       bonus = 0
       if (n ~ /^mipsel/ || n ~ /^mipselsf/ || n ~ /^mips64el/) bonus = 2
       else if (n ~ /^aarch64/ || n ~ /^arm64/) bonus = 2
+      else if (n ~ /^arm/ || n ~ /^armv7/) bonus = 2
       score = p * 10 + bonus
       if (score > best) { best = score; name = n }
     }
@@ -772,9 +949,16 @@ _arch_from_opkg() {
   opkg print-architecture 2>/dev/null | _arch_pick_best
 }
 
-# /opt/etc/opkg.conf — arch … или URL src/gz (mipselsf-k3.4, aarch64-k3.10, …)
+# Чтение opkg.conf (/etc/opkg.conf для OpenWrt или /opt/etc/opkg.conf для Keenetic)
 _arch_from_opkg_conf() {
-  local conf="${1:-/opt/etc/opkg.conf}" line name from_url=""
+  local conf="${1:-}" line name from_url=""
+  if [ -z "$conf" ]; then
+    if [ "$ROUTER_OS" = "openwrt" ]; then
+      conf="/etc/opkg.conf"
+    else
+      conf="/opt/etc/opkg.conf"
+    fi
+  fi
   [ -f "$conf" ] || return 0
 
   name=$(grep -E '^[[:space:]]*arch[[:space:]]+' "$conf" 2>/dev/null | _arch_pick_best)
@@ -790,6 +974,7 @@ _arch_from_opkg_conf() {
           *mipselsf*|*mips64el*) from_url="mipselsf"; break ;;
           *mipssf*)              from_url="mipssf"; break ;;
           *aarch64*|*arm64*)     from_url="aarch64"; break ;;
+          *armv7*|*armhf*)       from_url="armv7"; break ;;
           */x64*|*x86_64*)       from_url="x86_64"; break ;;
           */x86*|*i386*)         from_url="x86"; break ;;
         esac
@@ -799,31 +984,12 @@ _arch_from_opkg_conf() {
   [ -n "$from_url" ] && printf '%s\n' "$from_url"
 }
 
-# RCI show/version: модель + наличие opkg-kmod-netfilter (один раз за сессию)
-_rci_fetch() {
-  local json
-  [ "$RCI_CHECKED" = "1" ] && return 0
-  RCI_CHECKED=1
-  json=$(curl -s --connect-timeout 2 --max-time 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null) \
-    || json=$(wget -qO- -T 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null) \
-    || json=""
-  [ -n "$json" ] || return 0
-
-  ROUTER_MODEL=$(printf '%s' "$json" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  ROUTER_TITLE=$(printf '%s' "$json" | sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  if printf '%s' "$json" | grep -q 'opkg-kmod-netfilter'; then
-    RCI_HAS_NF_KMOD=1
-  else
-    RCI_HAS_NF_KMOD=0
-  fi
-}
-
 # Строка под заголовком: Модель: WR3000P (KN-3811) 5.1.5 aarch64
-# ARCH зелёный из opkg, жёлтый из opkg.conf / uname.
+# ARCH зелёный из opkg / openwrt_release, жёлтый из opkg.conf / uname.
 print_arch_line() {
   local arch_col
   case "$ARCH_SOURCE" in
-    opkg) arch_col="$GREEN" ;;
+    opkg|openwrt_release) arch_col="$GREEN" ;;
     conf|uname) arch_col="$YELLOW" ;;
     *) arch_col="$DIM" ;;
   esac
@@ -834,23 +1000,37 @@ print_arch_line() {
   else
     printf ' %s—%s' "$DIM" "$NC"
   fi
-  [ -n "$ROUTER_TITLE" ] && printf ' %s' "$ROUTER_TITLE"
+  if [ -n "$ROUTER_TITLE" ]; then
+    printf ' (%s)' "$ROUTER_TITLE"
+  fi
   if [ -n "$ARCH" ]; then
     printf ' %s%s%s' "$arch_col" "$ARCH" "$NC"
   fi
   printf '\n'
 
-  if [ "$RCI_HAS_NF_KMOD" = "0" ]; then
-    printf '%s\n' "${RED}${BOLD}[!] Через web-интерфейс Keenetic/Netcraze установить пакет «Модули ядра подсистемы Netfilter» (OPKG → Kernel modules for Netfilter).${NC}"
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    if [ "$OS_HAS_NF_QUEUE" = "0" ]; then
+      if [ "$ROUTER_FW_TYPE" = "fw4" ]; then
+        printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите: opkg update && opkg install kmod-nft-queue${NC}"
+      else
+        printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите: opkg update && opkg install kmod-ipt-nfqueue iptables-mod-nfqueue${NC}"
+      fi
+    fi
+  elif [ "$ROUTER_OS" = "keenetic" ]; then
+    if [ "$RCI_HAS_NF_KMOD" = "0" ]; then
+      printf '%s\n' "${RED}${BOLD}[!] Через web-интерфейс Keenetic/Netcraze установить пакет «Модули ядра подсистемы Netfilter» (OPKG → Kernel modules for Netfilter).${NC}"
+    fi
   fi
 }
 
 detect_arch() {
   local um cand
 
-  # Уже определено — только перерисовать строку (RCI кэшируется)
+  # Гарантируем, что ОС уже определена
+  [ "$OS_CHECKED" = "1" ] || detect_os
+
+  # Уже определено — только перерисовать строку
   if [ -n "$ARCH" ] || [ -n "$ARCH_SOURCE" ]; then
-    _rci_fetch
     print_arch_line
     return 0
   fi
@@ -860,18 +1040,37 @@ detect_arch() {
   ARCH=$(_arch_normalize "$ARCH_RAW")
   [ -n "$ARCH" ] && ARCH_SOURCE="opkg"
 
-  # 2) /opt/etc/opkg.conf
+  # 2) opkg.conf
   if [ -z "$ARCH" ]; then
-    ARCH_RAW=$(_arch_from_opkg_conf /opt/etc/opkg.conf)
+    ARCH_RAW=$(_arch_from_opkg_conf)
     ARCH=$(_arch_normalize "$ARCH_RAW")
     [ -n "$ARCH" ] && ARCH_SOURCE="conf"
   fi
 
-  # 3) uname -m (mips* не берём — на Keenetic врёт)
+  # 3) OpenWrt: DISTRIB_ARCH из /etc/openwrt_release
+  if [ -z "$ARCH" ] && [ "$ROUTER_OS" = "openwrt" ] && [ -n "${DISTRIB_ARCH_VAL:-}" ]; then
+    cand=$(_arch_normalize "$DISTRIB_ARCH_VAL")
+    if [ -n "$cand" ]; then
+      ARCH="$cand"
+      ARCH_RAW="$DISTRIB_ARCH_VAL"
+      ARCH_SOURCE="openwrt_release"
+    fi
+  fi
+
+  # 4) uname -m (mips* не берём на Keenetic — врёт)
   if [ -z "$ARCH" ]; then
     um=$(uname -m 2>/dev/null || true)
     case "$um" in
-      mips|mipsel|mips64|mips64el|"") ;;
+      mips|mipsel|mips64|mips64el|"")
+        if [ "$ROUTER_OS" = "openwrt" ]; then
+          cand=$(_arch_normalize "$um")
+          if [ -n "$cand" ]; then
+            ARCH="$cand"
+            ARCH_RAW="$um"
+            ARCH_SOURCE="uname"
+          fi
+        fi
+        ;;
       *)
         cand=$(_arch_normalize "$um")
         if [ -n "$cand" ]; then
@@ -885,7 +1084,6 @@ detect_arch() {
 
   [ -z "$ARCH_SOURCE" ] && ARCH_SOURCE="none"
 
-  _rci_fetch
   print_arch_line
 
   if [ -z "$ARCH" ]; then
@@ -6071,14 +6269,24 @@ fi
 export SCRIPT_PATH
 
 ensure_menu_symlink() {
-  local target="/opt/nfqws-menu.sh" link="/opt/bin/menu" cur
+  local target link cur
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    target="/usr/bin/nfqws-menu.sh"
+    link="/usr/bin/menu"
+    [ -d /usr/bin ] || link="/bin/menu"
+  else
+    target="/opt/nfqws-menu.sh"
+    link="/opt/bin/menu"
+  fi
   if [ ! -f "$target" ] && [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
-    case "$SCRIPT_PATH" in /opt/*) target="$SCRIPT_PATH" ;; esac
+    case "$SCRIPT_PATH" in
+      /opt/*|/usr/*|/etc/*|/root/*|/tmp/*) target="$SCRIPT_PATH" ;;
+    esac
   fi
   [ -f "$target" ] || return 0
   # curl -o сбрасывает +x — всегда восстанавливаем, иначе menu → Permission denied
   chmod +x "$target" 2>/dev/null || true
-  [ -d /opt/bin ] || mkdir -p /opt/bin 2>/dev/null || return 0
+  mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
   if [ -L "$link" ]; then
     cur=$(readlink "$link" 2>/dev/null || true)
     [ "$cur" = "$target" ] && return 0
@@ -6089,8 +6297,12 @@ ensure_menu_symlink() {
 
 ensure_menu_symlink
 
-if ! command -v opkg >/dev/null 2>&1; then
-  error "opkg не найден. Скрипт предназначен для Entware (Keenetic/Netcraze)."
+if ! command -v opkg >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    error "Пакетный менеджер (opkg/apk) не найден в OpenWrt."
+  else
+    error "opkg не найден. Скрипт предназначен для Entware (Keenetic/Netcraze) или OpenWrt."
+  fi
   exit 1
 fi
 
