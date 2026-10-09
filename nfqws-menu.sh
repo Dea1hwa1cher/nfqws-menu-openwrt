@@ -4050,7 +4050,363 @@ remove_dns_menu() {
   [ "$removed_any" -eq 1 ] && dns_save_config
 }
 
+# ---------------------------------------------------------------------------
+# Управление DoT/DoH — OpenWrt: https-dns-proxy (DoH) + dnsmasq per-domain.
+# Сервер = uci-секция https-dns-proxy (listen_port задаём всегда явно),
+# привязка домена = list dhcp.@dnsmasq[0].server «/domain/127.0.0.1#PORT».
+# dnsmasq_config_update='' — не подменять все upstream'ы dnsmasq на прокси.
+# DoT (ndmc dns-proxy) на OpenWrt не реализован — только DoH.
+# ---------------------------------------------------------------------------
+HDP_PORT_BASE=5053
+
+hdp_installed() {
+  [ -x /etc/init.d/https-dns-proxy ] && return 0
+  command -v https-dns-proxy >/dev/null 2>&1 && return 0
+  return 1
+}
+
+hdp_ensure() {
+  command -v uci >/dev/null 2>&1 || { error "uci не найден."; return 1; }
+  if ! hdp_installed; then
+    info "Установка https-dns-proxy (DoH-прокси для dnsmasq)..."
+    opkg update >/dev/null 2>&1 || true
+    opkg install https-dns-proxy || { error "Не удалось установить https-dns-proxy."; return 1; }
+  fi
+  if ! uci -q get https-dns-proxy.config >/dev/null 2>&1; then
+    error "Конфиг /etc/config/https-dns-proxy не найден."
+    return 1
+  fi
+  # режим выборочных доменов: прокси не должен забирать весь DNS dnsmasq.
+  # Имя опции в разных версиях пакета: dnsmasq_config_update / update_dnsmasq_config.
+  local cur
+  cur=$(uci -q get https-dns-proxy.config.dnsmasq_config_update 2>/dev/null)
+  [ -z "$cur" ] && cur=$(uci -q get https-dns-proxy.config.update_dnsmasq_config 2>/dev/null)
+  if [ "$cur" = "*" ]; then
+    if uci -q get https-dns-proxy.config.dnsmasq_config_update >/dev/null 2>&1; then
+      uci set https-dns-proxy.config.dnsmasq_config_update=''
+    elif uci -q get https-dns-proxy.config.update_dnsmasq_config >/dev/null 2>&1; then
+      uci set https-dns-proxy.config.update_dnsmasq_config=''
+    fi
+    uci commit https-dns-proxy
+    info "https-dns-proxy переведён в режим выборочных доменов (только привязанные домены пойдут через DoH)."
+  fi
+  return 0
+}
+
+# Список инстансов: «uci-секция|порт|URI»
+hdp_instances() {
+  local out line id uri port
+  out=$(uci -q show https-dns-proxy 2>/dev/null) || return 0
+  printf '%s\n' "$out" | grep -E '^https-dns-proxy\.[^=]+=https-dns-proxy$' | \
+  while IFS= read -r line; do
+    id=${line#https-dns-proxy.}
+    id=${id%=https-dns-proxy}
+    [ -n "$id" ] || continue
+    uri=$(uci -q get "https-dns-proxy.$id.resolver_url" 2>/dev/null)
+    port=$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)
+    printf '%s|%s|%s\n' "$id" "${port:-auto}" "${uri:-?}"
+  done
+}
+
+hdp_next_port() {
+  local max=$((HDP_PORT_BASE - 1)) line port
+  while IFS='|' read -r _id port _uri; do
+    case "$port" in ''|auto) continue ;; esac
+    case "$port" in *[!0-9]*) continue ;; esac
+    [ "$port" -gt "$max" ] 2>/dev/null && max=$port
+  done <<EOF
+$(hdp_instances)
+EOF
+  echo $((max + 1))
+}
+
+# Привязки доменов: «домен|порт»
+owrt_dns_routes() {
+  local list r d
+  list=$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null) || return 0
+  for r in $list; do
+    case "$r" in
+      /*/*127.0.0.1\#*) ;;
+      *) continue ;;
+    esac
+    d=${r#/}
+    printf '%s|%s\n' "${d%%/*}" "${d##*#}"
+  done
+}
+
+show_dns_servers_openwrt() {
+  echo
+  printf '%s\n' "${BOLD}DoH-серверы (https-dns-proxy):${NC}"
+  local any=0 line id port uri
+  while IFS='|' read -r id port uri; do
+    [ -n "$id" ] || continue
+    any=1
+    printf '  %s%s%s %s➔ 127.0.0.1#%s%s\n' "$CYAN" "$uri" "$NC" "$DIM" "$port" "$NC"
+  done <<EOF
+$(hdp_instances)
+EOF
+  [ "$any" -eq 0 ] && printf '  %s— серверов нет —%s\n' "$DIM" "$NC"
+  echo
+  printf '%s\n' "${BOLD}Привязки доменов (dnsmasq):${NC}"
+  any=0
+  local d p
+  while IFS='|' read -r d p; do
+    [ -n "$d" ] || continue
+    any=1
+    printf '  %s%-40s%s %s➔ 127.0.0.1#%s%s\n' "$CYAN" "$d" "$NC" "$DIM" "$p" "$NC"
+  done <<EOF
+$(owrt_dns_routes)
+EOF
+  [ "$any" -eq 0 ] && printf '  %s— привязок нет —%s\n' "$DIM" "$NC"
+}
+
+owrt_doh_add() {
+  # $1 = URI DoH
+  local uri="$1" host bootstrap="" sid port id u
+  case "$uri" in
+    https://*) ;;
+    *) error "URI должен начинаться с https:// — получено: $uri"; return 1 ;;
+  esac
+  host=${uri#https://}
+  host=${host%%/*}
+  host=${host%%:*}
+  case "$host" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) bootstrap="$host" ;;
+  esac
+
+  if ! hdp_ensure; then return 1; fi
+
+  # не плодить дубликаты
+  while IFS='|' read -r id port u; do
+    [ -n "$id" ] || continue
+    [ "$u" = "$uri" ] && { warn "Такой сервер уже добавлен."; return 0; }
+  done <<EOF
+$(hdp_instances)
+EOF
+
+  port=$(hdp_next_port)
+  sid=$(uci add https-dns-proxy https-dns-proxy 2>/dev/null) || { error "uci add не удался."; return 1; }
+  uci set "https-dns-proxy.$sid.resolver_url=$uri"
+  [ -n "$bootstrap" ] && uci set "https-dns-proxy.$sid.bootstrap_dns=$bootstrap"
+  uci set "https-dns-proxy.$sid.listen_port=$port"
+  uci commit https-dns-proxy
+  /etc/init.d/https-dns-proxy enable >/dev/null 2>&1 || true
+  /etc/init.d/https-dns-proxy restart >/dev/null 2>&1 || /etc/init.d/https-dns-proxy start >/dev/null 2>&1 || true
+  info "Сервер добавлен: $uri ➔ 127.0.0.1#$port"
+}
+
+owrt_bind_domain_menu() {
+  if ! hdp_ensure; then return 1; fi
+  local n=0 ports="" id port uri pick doms d
+  echo
+  printf '%s\n' "${BOLD}К какому DoH-серверу привязать домен:${NC}"
+  while IFS='|' read -r id port uri; do
+    [ -n "$id" ] || continue
+    n=$((n + 1))
+    printf ' %s) %s %s(127.0.0.1#%s)%s\n' "$n" "$uri" "$DIM" "$port" "$NC"
+    ports="$ports $port"
+  done <<EOF
+$(hdp_instances)
+EOF
+  [ "$n" -eq 0 ] && { warn "Сначала добавьте DoH-сервер (пункт 1)."; return 0; }
+  echo " 0) Отмена"
+  ask "${LBL_YOUR_CHOICE} [0]: "
+  read -r pick
+  case "$pick" in 0|"") return 0 ;; esac
+  case "$pick" in
+    *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;;
+  esac
+  [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
+  port=$(printf '%s\n' $ports | awk -v n="$pick" 'NR == n')
+  case "$port" in
+    ''|auto) warn "У сервера не задан listen_port — добавьте его заново через это меню."; return 1 ;;
+  esac
+  ask "Домены через запятую (напр. instagram.com,cdninstagram.com): "
+  read -r doms
+  [ -z "$doms" ] && return 0
+  if ! uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+    uci add dhcp dnsmasq >/dev/null
+  fi
+  for d in $(echo "$doms" | tr ',;' '  '); do
+    [ -n "$d" ] || continue
+    if uci add_list "dhcp.@dnsmasq[0].server=/$d/127.0.0.1#$port"; then
+      info "$d ➔ 127.0.0.1#$port"
+    else
+      warn "не удалось: $d"
+    fi
+  done
+  uci commit dhcp
+  reload_dns_service
+}
+
+owrt_unbind_menu() {
+  local n=0 doms="" d p pick
+  echo
+  printf '%s\n' "${BOLD}Привязки доменов:${NC}"
+  while IFS='|' read -r d p; do
+    [ -n "$d" ] || continue
+    n=$((n + 1))
+    printf ' %s) %s %s➔ 127.0.0.1#%s%s\n' "$n" "$d" "$DIM" "$p" "$NC"
+    doms="$doms $d"
+  done <<EOF
+$(owrt_dns_routes)
+EOF
+  [ "$n" -eq 0 ] && { info "Привязок нет."; return 0; }
+  echo " a) Удалить все"
+  echo " 0) Отмена"
+  ask "${LBL_YOUR_CHOICE} [0]: "
+  read -r pick
+  case "$pick" in
+    a|A) owrt_route_del_all ;;
+    0|"") return 0 ;;
+    *)
+      case "$pick" in *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;; esac
+      [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
+      d=$(printf '%s\n' $doms | awk -v n="$pick" 'NR == n')
+      owrt_route_del "$d"
+      ;;
+  esac
+}
+
+owrt_route_del() {
+  # $1 = домен; del_list требует точного значения — удаляем перечитыванием списка
+  local list r d removed=0
+  list=$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null) || return 0
+  for r in $list; do
+    d=${r#/}
+    d=${d%%/*}
+    [ "$d" = "$1" ] || continue
+    uci -q del_list "dhcp.@dnsmasq[0].server=$r" && removed=$((removed + 1))
+  done
+  [ "$removed" -eq 0 ] && { info "Привязка $1 не найдена."; return 0; }
+  uci commit dhcp
+  reload_dns_service
+  info "Привязка удалена: $1"
+}
+
+owrt_route_del_all() {
+  local list r d removed=0
+  list=$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null) || return 0
+  for r in $list; do
+    case "$r" in
+      /*/*127.0.0.1\#*) ;;
+      *) continue ;;
+    esac
+    uci -q del_list "dhcp.@dnsmasq[0].server=$r" && removed=$((removed + 1))
+  done
+  [ "$removed" -eq 0 ] && { info "Привязок нет."; return 0; }
+  uci commit dhcp
+  reload_dns_service
+  info "Удалено привязок: $removed"
+}
+
+owrt_del_server_menu() {
+  local n=0 ids="" id port uri pick
+  echo
+  printf '%s\n' "${BOLD}Удаление DoH-сервера:${NC}"
+  while IFS='|' read -r id port uri; do
+    [ -n "$id" ] || continue
+    n=$((n + 1))
+    printf ' %s) %s %s(127.0.0.1#%s)%s\n' "$n" "$uri" "$DIM" "$port" "$NC"
+    ids="$ids $id"
+  done <<EOF
+$(hdp_instances)
+EOF
+  [ "$n" -eq 0 ] && { info "Серверов нет."; return 0; }
+  echo " 0) Отмена"
+  ask "${LBL_YOUR_CHOICE} [0]: "
+  read -r pick
+  case "$pick" in 0|"") return 0 ;; esac
+  case "$pick" in
+    *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;;
+  esac
+  [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
+  id=$(printf '%s\n' $ids | awk -v n="$pick" 'NR == n')
+  local port_del
+  port_del=$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)
+  uci -q delete "https-dns-proxy.$id"
+  uci commit https-dns-proxy
+  if [ -n "$port_del" ]; then
+    local d p
+    while IFS='|' read -r d p; do
+      [ -n "$d" ] || continue
+      [ "$p" = "$port_del" ] || continue
+      uci -q del_list "dhcp.@dnsmasq[0].server=/$d/127.0.0.1#$port_del"
+    done <<EOF
+$(owrt_dns_routes)
+EOF
+    uci commit dhcp
+  fi
+  /etc/init.d/https-dns-proxy restart >/dev/null 2>&1 || true
+  reload_dns_service
+  info "Сервер удалён."
+}
+
+owrt_add_doh_menu() {
+  echo
+  printf '%s\n' "${BOLD}Добавление DoH сервера (https-dns-proxy):${NC}"
+  local line
+  while IFS='|' read -r num label uri; do
+    printf ' %2s) %s\n' "$num" "$label"
+  done <<EOF
+$(doh_servers_data)
+EOF
+  printf ' %2s) Ввести вручную (произвольный URI)\n' 32
+  echo " 0) Отмена"
+  printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
+  ask "${LBL_YOUR_CHOICE} [0]: "
+  read -r raw_choices
+  [ -z "$raw_choices" ] || [ "$raw_choices" = "0" ] && return
+
+  local choice uri added_any=0
+  for choice in $(echo "$raw_choices" | tr ',;' '  '); do
+    case "$choice" in
+      0) return 0 ;;
+      32)
+        ask "Введите URI DoH сервера: "
+        read -r uri
+        [ -n "$uri" ] && { owrt_doh_add "$uri" && added_any=1; }
+        ;;
+      *[!0-9]*) continue ;;
+      *)
+        uri=$(doh_servers_data | grep -E "^${choice}\|" | cut -d'|' -f3)
+        [ -n "$uri" ] && { owrt_doh_add "$uri" && added_any=1; }
+        ;;
+    esac
+  done
+  [ "$added_any" -eq 1 ] || info "Ничего не добавлено."
+}
+
+menu_dns_manage_openwrt() {
+  while true; do
+    clear 2>/dev/null || true
+    show_dns_servers_openwrt
+    echo
+    printf '%s\n' " ${BOLD}1)${NC} Добавить DoH сервер (https-dns-proxy)"
+    printf '%s\n' " ${BOLD}2)${NC} Привязать домен к DoH серверу"
+    printf '%s\n' " ${BOLD}3)${NC} ${RED}Удалить привязку домена${NC}"
+    printf '%s\n' " ${BOLD}4)${NC} ${RED}Удалить DoH сервер${NC}"
+    printf '%s\n' " ${BOLD}0)${NC} ${LBL_BACK_ITEM}"
+    printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
+    printf '%s\n' "${DIM}DoT на OpenWrt этим меню не управляется — используйте DoH-серверы.${NC}"
+    ask "${LBL_YOUR_CHOICE} [0]: "
+    read -r choice
+    case $choice in
+      1) owrt_add_doh_menu ;;
+      2) owrt_bind_domain_menu ;;
+      3) owrt_unbind_menu ;;
+      4) owrt_del_server_menu ;;
+      0|"") return 0 ;;
+      *) warn "Неверный ввод, попробуйте снова."; sleep 1 ;;
+    esac
+  done
+}
+
 menu_dns_manage() {
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    menu_dns_manage_openwrt
+    return 0
+  fi
   if ! command -v ndmc >/dev/null 2>&1; then
     error "ndmc не найден. Управление DoT/DoH доступно только на Keenetic/Netcraze OS."
     return 1
@@ -6400,7 +6756,7 @@ main_menu() {
       5)  menu_dot_doh || true ;;
       6)  menu_change_fake_blob || true ;;
       7)  menu_update_hosts || true ;;
-      8)  require_keenetic && menu_dns_manage || true ;;
+      8)  menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
       11) menu_awg_manager || true ;;
       12) require_keenetic && menu_keenkit || true ;;

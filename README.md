@@ -60,7 +60,9 @@ menu
 | Фид пакетов | `https://nfqws.github.io/nfqws-keenetic/$ARCH` | `https://nfqws.github.io/nfqws-keenetic/openwrt` (+ GPG-ключ через `opkg-key add`) |
 | Symlink меню | `/opt/bin/menu` | `/usr/bin/menu` |
 | Веб-интерфейс | `nfqws-keenetic-web` | не устанавливается (сборка только под Entware) |
-| Пункты 7/8/12 (hosts, DoT/DoH через ndmc, KeenKit) | доступны | только Keenetic (нужен `ndmc`) |
+| Пункт 7 (hosts) | `ndmc ip host` | блок в `/etc/hosts` + reload dnsmasq |
+| Пункт 8 (DoT/DoH) | `ndmc dns-proxy` | `https-dns-proxy` + dnsmasq per-domain (DoH) |
+| Пункт 12 (KeenKit) | доступен | только Keenetic (нужен `ndmc`) |
 
 Стратегии при применении автоматически переписывают пути blob/list-файлов под префикс пакета.
 
@@ -235,15 +237,28 @@ menu
 
 ### 8. Управление DoT/DoH
 
-Управление DNS-over-TLS / DNS-over-HTTPS на стороне **Keenetic** через `ndmc`.
+Управление DNS-over-TLS / DNS-over-HTTPS:
 
-Подменю:
+- **Keenetic/Netcraze** — через `ndmc` (`dns-proxy tls/https upstream ...`), сохранение конфига роутера.
+- **OpenWrt** — через пакет `https-dns-proxy` (DoH): серверы как uci-секции, привязка домена — `server=/домен/127.0.0.1#порт` в `dhcp.@dnsmasq[0].server`. Режим выборочных доменов: остальной DNS идёт как раньше. DoT этим меню на OpenWrt не управляется.
+
+Подменю (Keenetic):
 
 ```
 1) Добавить DoT сервер(ы)
 2) Добавить DoH сервер(ы)
 3) Привязать домен к DNS (Пресеты)
 4) Удалить сервер(ы)
+0) Назад
+```
+
+Подменю (OpenWrt):
+
+```
+1) Добавить DoH сервер (https-dns-proxy)
+2) Привязать домен к DoH серверу
+3) Удалить привязку домена
+4) Удалить DoH сервер
 0) Назад
 ```
 
