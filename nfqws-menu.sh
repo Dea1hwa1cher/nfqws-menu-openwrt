@@ -1,6 +1,6 @@
 #!/bin/sh
 # nfqws-menu.sh — интерактивное меню установки/управления
-# nfqws-keenetic / nfqws2-keenetic / nfqws-keenetic-web для Entware (Keenetic / Netcraze)
+# nfqws-keenetic / nfqws2-keenetic / nfqws-keenetic-web для Entware (Keenetic / Netcraze) и OpenWrt
 # Репозиторий стратегий: https://github.com/rndnaame/nfqws-menu
 #
 # Версионирование (MAJOR.MINOR.PATCH):
@@ -1694,10 +1694,6 @@ install_deps() {
 
 ask_web_install() {
   echo
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    info "Веб-интерфейс nfqws-keenetic-web собран только под Entware — на OpenWrt не устанавливается."
-    return 0
-  fi
   if confirm_no "Установить веб-интерфейс nfqws-keenetic-web?"; then
     install_web
   fi
@@ -2078,17 +2074,25 @@ menu_install_nfqws() {
 }
 
 install_web() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    error "nfqws-keenetic-web доступен только для Entware (Keenetic/Netcraze)."
-    return 1
-  fi
   info "Установка nfqws-keenetic-web..."
   install_deps
-  ensure_opkg_repo "nfqws-keenetic-web" "https://nfqws.github.io/nfqws-keenetic-web/all"
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    if ! ensure_openwrt_feed_key "nfqws-keenetic-web"; then
+      return 1
+    fi
+    ensure_opkg_repo "nfqws-keenetic-web" "$(nfqws_feed_url nfqws-keenetic-web)"
+  else
+    ensure_opkg_repo "nfqws-keenetic-web" "https://nfqws.github.io/nfqws-keenetic-web/all"
+  fi
   pkg_install nfqws-keenetic-web
   info "Веб-интерфейс установлен."
   info "Адрес: http://<IP-роутера>:90"
-  info "Логин/пароль — учётные данные Entware (по умолчанию root / keenetic)"
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    info "Логин/пароль — учётные данные root-пользователя роутера"
+    info "Авторизацию можно отключить: ${CONF_BASE_DIR}/nfqws_web.conf → enabled = false"
+  else
+    info "Логин/пароль — учётные данные Entware (по умолчанию root / keenetic)"
+  fi
 }
 
 # ---------------------------------------------------------------------------

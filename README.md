@@ -60,7 +60,7 @@ menu
 | Пакетный менеджер | `opkg` | `opkg` (OpenWrt ≤24.10) или `apk` (25.x+) — определяется автоматически |
 | Фид пакетов | `https://nfqws.github.io/nfqws-keenetic/$ARCH` | `https://nfqws.github.io/nfqws-keenetic/openwrt` (+ GPG-ключ: `.pub` через `opkg-key add` / `.pem` в `/etc/apk/keys`) |
 | Symlink меню | `/opt/bin/menu` | `/usr/bin/menu` |
-| Веб-интерфейс | `nfqws-keenetic-web` | не устанавливается (сборка только под Entware) |
+| Веб-интерфейс | `nfqws-keenetic-web` из фида `.../all` | нативно из фида `https://nfqws.github.io/nfqws-keenetic-web/openwrt` |
 | Пункт 7 (hosts) | `ndmc ip host` | блок в `/etc/hosts` + reload dnsmasq |
 | Пункт 8 (DoT/DoH) | `ndmc dns-proxy` | `https-dns-proxy` + dnsmasq per-domain (DoH) |
 | Пункт 12 (KeenKit) | доступен | только Keenetic (нужен `ndmc`) |
