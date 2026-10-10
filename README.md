@@ -1,5 +1,7 @@
 # NFQWS-MENU (OpenWrt / Keenetic)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Интерактивное меню установки и управления пакетами **nfqws-keenetic**, **nfqws2-keenetic** и **nfqws-keenetic-web** для роутеров на **OpenWrt** (нативно, opkg и apk) и **Keenetic / Netcraze** с **Entware**.
 
 Это форк [**rndnaame/nfqws-menu**](https://github.com/rndnaame/nfqws-menu), адаптированный под чистый OpenWrt: автоматическое определение ОС, нативные фиды пакетов nfqws, procd-сервисы, DNS/hosts через UCI и dnsmasq, поддержка apk (OpenWrt 25.x). Поведение на Keenetic/Entware сохранено без изменений.
@@ -580,9 +582,7 @@ menu
 
 ---
 
-## Лицензия / отказ от ответственности
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## Отказ от ответственности
 
 Материалы подготовлены в ознакомительных и научно-технических целях.\
 Использование на свой страх и риск. Автор не несёт ответственности за последствия.
