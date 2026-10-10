@@ -11,9 +11,8 @@
 
 set -e
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.1.1"
 
-REPO_URL="https://github.com/Dea1hwa1cher/nfqws-menu-openwrt"
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
 
@@ -64,7 +63,6 @@ ROUTER_OS_NAME=""   # OpenWrt, ImmortalWrt, KeeneticOS, Linux
 ROUTER_OS_VER=""    # 23.05.2, 5.1.5, ...
 ROUTER_MODEL=""     # Модель роутера
 ROUTER_TITLE=""     # Версия/заголовок для строки меню
-ROUTER_TARGET=""    # ramips/mt7621, mediatek/filogic, etc.
 ROUTER_FW_TYPE="unknown"   # fw4 (nftables) | fw3 (iptables) | iptables | unknown
 OS_HAS_NF_QUEUE=""  # 1=модули NFQUEUE есть/загружены, 0=нет, ""=не определено
 OS_CHECKED=0
@@ -74,7 +72,6 @@ DISTRIB_ARCH_VAL=""
 
 CONF_BASE_DIR="/opt/etc"
 INIT_BASE_DIR="/opt/etc/init.d"
-BIN_BASE_DIR="/opt/bin"
 STATUS_FILE="/opt/lib/opkg/status"
 OPKG_CONF_DIR="/opt/etc/opkg"
 APK_REPO_DIR="/etc/apk/repositories.d"
@@ -130,18 +127,16 @@ detect_os() {
 
   case "$ROUTER_OS" in
     openwrt)
-      local id release rev target arch desc
+      local id release rev arch desc
       if [ -f /etc/openwrt_release ]; then
         id=$(sed -n "s/^DISTRIB_ID=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
         release=$(sed -n "s/^DISTRIB_RELEASE=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
         rev=$(sed -n "s/^DISTRIB_REVISION=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
-        target=$(sed -n "s/^DISTRIB_TARGET=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
         arch=$(sed -n "s/^DISTRIB_ARCH=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
         desc=$(sed -n "s/^DISTRIB_DESCRIPTION=['\"]\?\([^'\"]*\)['\"]\?/\1/p" /etc/openwrt_release 2>/dev/null | head -1)
       fi
       ROUTER_OS_NAME="${id:-OpenWrt}"
       ROUTER_OS_VER="${release:-}"
-      ROUTER_TARGET="${target:-}"
       DISTRIB_ARCH_VAL="${arch:-}"
       if [ -n "$release" ]; then
         ROUTER_TITLE="$ROUTER_OS_NAME $release"
@@ -184,7 +179,6 @@ detect_os() {
 
       CONF_BASE_DIR="/etc"
       INIT_BASE_DIR="/etc/init.d"
-      BIN_BASE_DIR="/usr/bin"
       STATUS_FILE="/usr/lib/opkg/status"
       OPKG_CONF_DIR="/etc/opkg"
       ;;
@@ -193,7 +187,6 @@ detect_os() {
       ROUTER_OS_NAME="KeeneticOS"
       CONF_BASE_DIR="/opt/etc"
       INIT_BASE_DIR="/opt/etc/init.d"
-      BIN_BASE_DIR="/opt/bin"
       STATUS_FILE="/opt/lib/opkg/status"
       OPKG_CONF_DIR="/opt/etc/opkg"
       ROUTER_FW_TYPE="iptables"
@@ -205,7 +198,6 @@ detect_os() {
       ROUTER_OS_NAME="Padavan"
       CONF_BASE_DIR="/opt/etc"
       INIT_BASE_DIR="/opt/etc/init.d"
-      BIN_BASE_DIR="/opt/bin"
       STATUS_FILE="/opt/lib/opkg/status"
       OPKG_CONF_DIR="/opt/etc/opkg"
       ROUTER_FW_TYPE="iptables"
@@ -225,7 +217,6 @@ detect_os() {
       ROUTER_MODEL=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || uname -n 2>/dev/null || echo "Linux Device")
       CONF_BASE_DIR="/etc"
       INIT_BASE_DIR="/etc/init.d"
-      BIN_BASE_DIR="/usr/bin"
       STATUS_FILE="/usr/lib/opkg/status"
       OPKG_CONF_DIR="/etc/opkg"
       ;;
@@ -965,28 +956,6 @@ ensure_openwrt_feed_key() {
   return 0
 }
 
-# Установка/обновление opkg-пакета (если установлен — upgrade)
-opkg_install_or_upgrade() {
-  local pkg="$1"
-  if [ "$(pkg_backend)" = "apk" ]; then
-    # apk add сам ставит или обновляет до последней доступной версии
-    info "Установка/обновление $pkg..."
-    pkg_install "$pkg"
-    return 0
-  fi
-  if is_installed "$pkg"; then
-    info "Пакет $pkg уже установлен — обновление..."
-    opkg update
-    opkg upgrade "$pkg"
-    info "Обновление завершено."
-  else
-    info "Установка $pkg..."
-    opkg update
-    opkg install "$pkg"
-    info "Установка завершена."
-  fi
-}
-
 # Перезапуск init-скрипта, если есть
 service_restart() {
   local init="$1"
@@ -999,6 +968,15 @@ backup_file() {
   [ -f "$f" ] || return 0
   dest="${f}.bak.$(date +%Y%m%d%H%M%S)"
   cp -a "$f" "$dest" && info "Бэкап: $dest"
+}
+
+# Стратегии в репозитории написаны под Entware (/opt/etc/nfqws*) — на OpenWrt
+# пакет живёт в /etc/nfqws*, подменяем префикс путей blob/list-файлов.
+strategy_retarget_paths() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  [ "$CONF_BASE_DIR" != "/opt/etc" ] || return 0
+  sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$f" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -2597,9 +2575,7 @@ apply_strategy() {
 
   # Стратегии в репозитории написаны под Entware (/opt/etc/nfqws*) —
   # на OpenWrt пакет живёт в /etc/nfqws*, подменяем префикс путей.
-  if [ "$CONF_BASE_DIR" != "/opt/etc" ]; then
-    sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$tmp" 2>/dev/null || true
-  fi
+  strategy_retarget_paths "$tmp"
 
   backup_file "$conf_dest"
 
@@ -3318,9 +3294,7 @@ load_dot_doh_strategy() {
     tr -d '\r' < "$tmp" | sed '/^[[:space:]]*$/d' > "$dest"
     rm -f "$tmp"
     # пути под префикс пакета (/opt на Entware, / на OpenWrt)
-    if [ "$CONF_BASE_DIR" != "/opt/etc" ]; then
-      sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$dest" 2>/dev/null || true
-    fi
+    strategy_retarget_paths "$dest"
     # маркер #DNS в начало, если его нет
     if ! grep -qE '^[[:space:]]*#DNS' "$dest" 2>/dev/null; then
       { printf '%s\n' '#DNS'; cat "$dest"; } > "${dest}.n" && mv "${dest}.n" "$dest"
@@ -4192,10 +4166,14 @@ hdp_ensure() {
   return 0
 }
 
-# Список инстансов: «uci-секция|порт|URI»
+# Список инстансов: «uci-секция|эффективный порт|URI».
+# Порт без явного listen_port пакет выдаёт по счётчику от 5053, причём шагает
+# на КАЖДЫЙ инстанс (init: port="$((port+1))" после запуска), поэтому считаем
+# здесь так же — иначе новый порт совпал бы с занятым авто-портом.
 hdp_instances() {
-  local out line id uri port
+  local out line id uri port auto next
   out=$(uci -q show https-dns-proxy 2>/dev/null) || return 0
+  auto=$HDP_PORT_BASE
   printf '%s\n' "$out" | grep -E '^https-dns-proxy\.[^=]+=https-dns-proxy$' | \
   while IFS= read -r line; do
     id=${line#https-dns-proxy.}
@@ -4203,14 +4181,18 @@ hdp_instances() {
     [ -n "$id" ] || continue
     uri=$(uci -q get "https-dns-proxy.$id.resolver_url" 2>/dev/null)
     port=$(uci -q get "https-dns-proxy.$id.listen_port" 2>/dev/null)
-    printf '%s|%s|%s\n' "$id" "${port:-auto}" "${uri:-?}"
+    case "$port" in
+      ''|*[!0-9]*) port=$auto ;;
+    esac
+    next=$((auto + 1))
+    auto=$next
+    printf '%s|%s|%s\n' "$id" "$port" "${uri:-?}"
   done
 }
 
 hdp_next_port() {
   local max=$((HDP_PORT_BASE - 1)) line port
   while IFS='|' read -r _id port _uri; do
-    case "$port" in ''|auto) continue ;; esac
     case "$port" in *[!0-9]*) continue ;; esac
     [ "$port" -gt "$max" ] 2>/dev/null && max=$port
   done <<EOF
@@ -4317,9 +4299,6 @@ EOF
   esac
   [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
   port=$(printf '%s\n' $ports | awk -v n="$pick" 'NR == n')
-  case "$port" in
-    ''|auto) warn "У сервера не задан listen_port — добавьте его заново через это меню."; return 1 ;;
-  esac
   ask "Домены через запятую (напр. instagram.com,cdninstagram.com): "
   read -r doms
   [ -z "$doms" ] && return 0
@@ -4553,15 +4532,29 @@ reload_dns_service() {
   fi
 }
 
+# Файл без управляемого блока nfqws-menu
+hosts_strip_block() {
+  awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
+    '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' "$1" 2>/dev/null
+}
+
+# Пары «IP<TAB>DOMAIN» из текущего блока /etc/hosts
+hosts_existing_pairs() {
+  awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
+    '$0 == B { inb=1; next } $0 == E { inb=0; next } inb && NF >= 2 { print $1 "\t" $2 }' /etc/hosts 2>/dev/null
+}
+
 # Текущие статические записи — форматированные строки на stdout
 host_entries_view() {
   if [ "$(hosts_backend)" = "openwrt" ]; then
     [ -r /etc/hosts ] || return 0
-    awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" '
-      $0 == B { inb=1; next }
-      $0 == E { inb=0; next }
-      inb && NF >= 2 { printf "  %s%-40s%s %s➔%s %s\n", C, $2, N, D, N, $1 }
-    ' C="$CYAN" N="$NC" D="$DIM" /etc/hosts 2>/dev/null
+    local ip domain
+    while IFS="$(printf '\t')" read -r ip domain || [ -n "$ip" ]; do
+      [ -n "$ip" ] && [ -n "$domain" ] || continue
+      printf '  %s%-40s%s %s➔%s %s\n' "$CYAN" "$domain" "$NC" "$DIM" "$NC" "$ip"
+    done <<EOF
+$(hosts_existing_pairs)
+EOF
     return 0
   fi
   local view_out line
@@ -4580,8 +4573,7 @@ host_entries_view() {
 host_entries_delete_all() {
   if [ "$(hosts_backend)" = "openwrt" ]; then
     if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
-      awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
-        '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > /etc/hosts.nfqws.tmp
+      hosts_strip_block /etc/hosts > /etc/hosts.nfqws.tmp
       cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
       reload_dns_service
       info "Блок nfqws-menu удалён из /etc/hosts."
@@ -4612,19 +4604,29 @@ host_entries_delete_all() {
 host_entries_apply() {
   if [ "$(hosts_backend)" = "openwrt" ]; then
     [ -f /etc/hosts ] || : > /etc/hosts
-    local block="/tmp/nfqws-hosts-block-$$.tmp"
+    local block="/tmp/nfqws-hosts-block-$$.tmp" merged="/tmp/nfqws-hosts-merge-$$.txt" n_dom
+    # сливаем с уже добавленным блоком: на Keenetic «ip host» накапливается,
+    # а замена блока целиком молча стирала записи, добавленные ранее
+    hosts_existing_pairs > "$merged"
+    cat "$1" >> "$merged"
     {
       printf '%s\n' "$HOSTS_MARK_BEGIN"
-      awk -F '\t' 'NF >= 2 && $1 != "" && $2 != "" { print $1 " " $2 }' "$1"
+      # при повторе домена побеждает более позднее значение (новый IP)
+      awk -F '\t' '
+        NF >= 2 && $1 != "" && $2 != "" {
+          if (!($2 in seen)) { seen[$2] = 1; order[++n] = $2 }
+          dom[$2] = $1
+        }
+        END { for (i = 1; i <= n; i++) print dom[order[i]] " " order[i] }
+      ' "$merged" > "${block}.body"
+      cat "${block}.body"
       printf '%s\n' "$HOSTS_MARK_END"
     } > "$block"
-    # прежний блок заменяется целиком
-    awk -v B="$HOSTS_MARK_BEGIN" -v E="$HOSTS_MARK_END" \
-      '$0 == B { skip=1; next } $0 == E { skip=0; next } !skip' /etc/hosts > "${block}.base" 2>/dev/null
-    [ -f "${block}.base" ] || : > "${block}.base"
+    n_dom=$(wc -l < "${block}.body" 2>/dev/null | tr -d ' ')
+    hosts_strip_block /etc/hosts > "${block}.base"
     cat "${block}.base" "$block" > /etc/hosts
-    rm -f "$block" "${block}.base"
-    info "Записано: /etc/hosts ($(wc -l < "$1" | tr -d ' ') доменов)."
+    rm -f "$block" "${block}.base" "${block}.body" "$merged"
+    info "Записано: /etc/hosts (доменов в блоке: ${n_dom:-0})."
     reload_dns_service
     return 0
   fi
@@ -4803,7 +4805,8 @@ $name"
 
   # Собираем IP\tDOMAIN: только IPv4, валидный домен (Keenetic ip host ≈64 записей)
   local sec
-  for sec in $selected_secs; do
+  # имена секций могут содержать пробелы — читаем построчно, не через word splitting
+  while IFS= read -r sec || [ -n "$sec" ]; do
     [ -z "$sec" ] && continue
     info "Секция: #$sec"
     awk -v sec="$sec" '
@@ -4857,13 +4860,26 @@ extract_script_version() {
     sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p'
 }
 
+# Канонический путь скрипта меню: установленная копия, иначе та, из которой
+# запущены сейчас (иначе п.99 пишет в один файл, а `menu` ссылается на другой)
+menu_script_target() {
+  local t
+  if [ "$ROUTER_OS" = "openwrt" ]; then
+    t="/usr/bin/nfqws-menu.sh"
+  else
+    t="/opt/nfqws-menu.sh"
+  fi
+  if [ ! -f "$t" ] && [ -n "${SCRIPT_PATH:-}" ] && [ -f "$SCRIPT_PATH" ]; then
+    case "$SCRIPT_PATH" in
+      /opt/*|/usr/*|/etc/*|/root/*|/tmp/*) t="$SCRIPT_PATH" ;;
+    esac
+  fi
+  printf '%s\n' "$t"
+}
+
 update_self() {
   local dest tmp="/tmp/nfqws-menu-update-$$.sh"
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    dest="/usr/bin/nfqws-menu.sh"
-  else
-    dest="/opt/nfqws-menu.sh"
-  fi
+  dest=$(menu_script_target)
   local remote_ver url
 
   info "Скачивание nfqws-menu.sh ..."
@@ -4896,8 +4912,9 @@ update_self() {
   chmod +x "$dest" 2>/dev/null || true
   rm -f "$tmp"
   rm -f "${CACHE_DIR}/updates.cache" 2>/dev/null || true
-  unset SCRIPT_PATH
-  export SCRIPT_PATH="$dest"
+  SCRIPT_PATH="$dest"
+  export SCRIPT_PATH
+  ensure_menu_symlink
   info "Перезапуск меню..."
   exec sh "$dest"
 }
@@ -5113,22 +5130,27 @@ tg_ws_proxy_rs_free_port() {
 # install.sh. Новую архитектуру придётся добавить в обоих местах.
 tg_ws_proxy_rs_target() {
   local arch best='' best_pri='' name pri
-  arch=$(opkg print-architecture 2>/dev/null) || return 1
+  arch=$(opkg print-architecture 2>/dev/null) || arch=''
   while read -r _keyword name pri; do
     [ -n "$name" ] || continue
-    [ "$name" = all ] && continue
+    case "$name" in all|noarch) continue ;; esac
     if [ -z "$best_pri" ] || [ "$pri" -gt "$best_pri" ] 2>/dev/null; then
       best="$name"; best_pri="$pri"
     fi
   done <<EOF
 $arch
 EOF
+  # apk (OpenWrt 25.x) не знает opkg; fallback — uname -m
+  [ -n "$best" ] || best=$(apk --print-arch 2>/dev/null) || best=''
+  [ -n "$best" ] || best=$(uname -m 2>/dev/null) || return 1
+  # имена OpenWrt содержат суффиксы через «_» (mipsel_24kc, aarch64_cortex-a53),
+  # Entware — через «-» (armv7-3.10), поэтому сравниваем по префиксу
   case "$best" in
-    aarch64|aarch64-[0-9]*) printf '%s' aarch64-unknown-linux-musl ;;
-    armv7|armv7-[0-9]*) printf '%s' armv7-unknown-linux-musleabihf ;;
-    mipsel|mipsel-[0-9]*) printf '%s' mipsel-unknown-linux-musl ;;
-    mips|mips-[0-9]*) printf '%s' mips-unknown-linux-musl ;;
-    x64|x64-[0-9]*) printf '%s' x86_64-unknown-linux-musl ;;
+    aarch64*)        printf '%s' aarch64-unknown-linux-musl ;;
+    armv7*|arm_cortex-a[7-9]*|arm_cortex-a1[0-5]*) printf '%s' armv7-unknown-linux-musleabihf ;;
+    mipsel*)         printf '%s' mipsel-unknown-linux-musl ;;
+    mips*)           printf '%s' mips-unknown-linux-musl ;;
+    x86_64*|x64*|amd64*) printf '%s' x86_64-unknown-linux-musl ;;
     *) return 1 ;;
   esac
 }
@@ -5719,9 +5741,6 @@ EOF
 # 15. telemt / telemt-panel — installer_telemt.sh
 # ---------------------------------------------------------------------------
 TELEMT_BUNDLE_URL="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/installer_telemt.sh"
-TELEMT_SYSTEMCTL_URL="https://raw.githubusercontent.com/anch665/keendev/main/systemctl.sh"
-TELEMT_JOURNALCTL_URL="https://raw.githubusercontent.com/anch665/keendev/main/journalctl.sh"
-
 
 is_telemt_installed() {
   [ -x /opt/usr/bin/telemt ] || [ -x /opt/etc/init.d/S99telemt ] || \
@@ -5857,15 +5876,38 @@ remove_magitrickle() {
   else
     warn "magitrickle не установлен."
   fi
-  local repo_conf="/opt/etc/opkg/magitrickle.conf"
-  [ "$ROUTER_OS" = "openwrt" ] && repo_conf="/etc/opkg/magitrickle.conf"
-  if [ -f "$repo_conf" ]; then
-    echo
-    if confirm_no "Удалить репозиторий MagiTrickle ($repo_conf)?"; then
-      rm -f "$repo_conf" && info "  удалён: $repo_conf"
-    else
-      info "Репозиторий MagiTrickle оставлен."
+  # репозиторий пишет add_repo.sh — имя файла нам неизвестно, ищем по подстроке
+  local repo_files="" f rc
+  if [ "$(pkg_backend)" = "apk" ]; then
+    rc="$APK_REPO_DIR"
+  elif [ "$ROUTER_OS" = "openwrt" ]; then
+    rc="$OPKG_CONF_DIR"
+  else
+    rc="/opt/etc/opkg"
+  fi
+  for f in "$rc"/*magitrickle*; do
+    if [ -f "$f" ]; then
+      repo_files="$repo_files
+$f"
     fi
+  done
+  [ -n "$repo_files" ] || return 0
+  echo
+  while IFS= read -r f || [ -n "$f" ]; do
+    [ -n "$f" ] && printf '%s\n' "  ${DIM}$f${NC}"
+  done <<EOF
+$repo_files
+EOF
+  if confirm_no "Удалить репозиторий MagiTrickle?"; then
+    while IFS= read -r f || [ -n "$f" ]; do
+      if [ -f "$f" ]; then
+        rm -f "$f" && info "  удалён: $f"
+      fi
+    done <<EOF
+$repo_files
+EOF
+  else
+    info "Репозиторий MagiTrickle оставлен."
   fi
 }
 
@@ -6964,18 +7006,12 @@ export SCRIPT_PATH
 
 ensure_menu_symlink() {
   local target link cur
+  target=$(menu_script_target)
   if [ "$ROUTER_OS" = "openwrt" ]; then
-    target="/usr/bin/nfqws-menu.sh"
     link="/usr/bin/menu"
     [ -d /usr/bin ] || link="/bin/menu"
   else
-    target="/opt/nfqws-menu.sh"
     link="/opt/bin/menu"
-  fi
-  if [ ! -f "$target" ] && [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
-    case "$SCRIPT_PATH" in
-      /opt/*|/usr/*|/etc/*|/root/*|/tmp/*) target="$SCRIPT_PATH" ;;
-    esac
   fi
   [ -f "$target" ] || return 0
   # curl -o сбрасывает +x — всегда восстанавливаем, иначе menu → Permission denied

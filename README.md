@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.0**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.1**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -445,6 +445,20 @@ Telegram MTProto-прокси на Rust (полная реализация оф�
 ---
 
 ## Changelog
+
+### 0.1.1
+
+Ревью кода после адаптации: мёртвый код, дубли, найденные баги.
+
+- **П. 99 (обновить скрипт)** — обновление пишет в тот же файл, на который ссылается `menu` (`menu_script_target()`), и перелинковывает symlink; раньше обновление в `/usr/bin/nfqws-menu.sh` оставляло `menu` указывать на старую копию
+- **П. 7 (hosts, OpenWrt)** — новые записи **добавляются к существующему блоку**, а не заменяют его (раньше ранее добавленные домены молча стирались); общий хелпер `hosts_strip_block()`/`hosts_existing_pairs()`
+- **П. 8 (DoH, OpenWrt)** — `hdp_instances()` считает **эффективный** порт инстанса (пакет выдаёт `listen_port` по счётчику от 5053 на каждый инстанс), поэтому `hdp_next_port()` больше не может выдать уже занятый порт
+- **П. 16 (tg-ws-proxy-rs)** — архитектура OpenWrt содержит суффиксы через `_` (`mipsel_24kc`, `aarch64_cortex-a53`): цель определяется по префиксу, добавлен fallback на `apk --print-arch` и `uname -m`; таблица размеров больше не пустая на типовых роутерах
+- **П. 88 (MagiTrickle)** — на apk файл репозитория ищется по подстроке в `/etc/apk/repositories.d`, а не только по имени `/etc/opkg/magitrickle.conf`
+- **П. 7** — имена секций hosts с пробелами больше не теряются (чтение построчно вместо word splitting)
+- `/opt/etc/nfqws*` → `/etc/nfqws*` в стратегиях вынесено в `strategy_retarget_paths()` (было три копии)
+- Удалено мёртвое: `REPO_URL`, `BIN_BASE_DIR`, `ROUTER_TARGET`, `opkg_install_or_upgrade()`, `TELEMT_SYSTEMCTL_URL`/`TELEMT_JOURNALCTL_URL`
+- Добавлен `.gitattributes` — `.sh`/`.conf`/`hosts`/`SHA256SUMS` всегда LF (CRLF ломает busybox ash)
 
 ### 0.1.0 (форк Dea1hwa1cher/nfqws-menu-openwrt)
 
