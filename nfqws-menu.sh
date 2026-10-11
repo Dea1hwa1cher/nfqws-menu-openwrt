@@ -27,15 +27,6 @@ CURL_MAX_TIME=25
 CURL_MAX_TIME_LARGE=180   # rkn.list ~2 МБ и подобные
 WGET_TIMEOUT=20
 
-# LD_LIBRARY_PATH не экспортируем глобально: /opt ломает ndmc (OpenSSL),
-# system-only ломает Entware wget/curl. Для ndmc — отдельная обёртка.
-# Нужно при запуске через CLI Keenetic (exec sh / telnet) и OPKG hooks,
-# где LD_LIBRARY_PATH=/opt/lib:/opt/usr/lib:/lib:/usr/lib.
-ndmc_cli() {
-  command -v ndmc >/dev/null 2>&1 || return 1
-  # системные libs первыми; иначе ndmc тянет OpenSSL из Entware → system failed
-  LD_LIBRARY_PATH=/lib:/usr/lib command ndmc -c "$@"
-}
 
 # ---------------------------------------------------------------------------
 # Цвета
@@ -56,46 +47,24 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Платформа и операционная система (OpenWrt / Keenetic / Padavan / Linux)
+# Платформа и операционная система (OpenWrt / Linux)
 # ---------------------------------------------------------------------------
-ROUTER_OS=""        # openwrt | keenetic | padavan | generic
-ROUTER_OS_NAME=""   # OpenWrt, ImmortalWrt, KeeneticOS, Linux
-ROUTER_OS_VER=""    # 23.05.2, 5.1.5, ...
+ROUTER_OS=""        # openwrt | generic
+ROUTER_OS_NAME=""   # OpenWrt, ImmortalWrt, Linux
+ROUTER_OS_VER=""    # 24.10.1, 23.05.5, ...
 ROUTER_MODEL=""     # Модель роутера
 ROUTER_TITLE=""     # Версия/заголовок для строки меню
-ROUTER_FW_TYPE="unknown"   # fw4 (nftables) | fw3 (iptables) | iptables | unknown
+ROUTER_FW_TYPE="unknown"   # fw4 (nftables) | fw3 (iptables) | unknown
 OS_HAS_NF_QUEUE=""  # 1=модули NFQUEUE есть/загружены, 0=нет, ""=не определено
 OS_CHECKED=0
-RCI_CHECKED=0
-RCI_HAS_NF_KMOD=""
 DISTRIB_ARCH_VAL=""
 
-CONF_BASE_DIR="/opt/etc"
-INIT_BASE_DIR="/opt/etc/init.d"
-STATUS_FILE="/opt/lib/opkg/status"
-OPKG_CONF_DIR="/opt/etc/opkg"
+CONF_BASE_DIR="/etc"
+INIT_BASE_DIR="/etc/init.d"
+STATUS_FILE="/usr/lib/opkg/status"
+OPKG_CONF_DIR="/etc/opkg"
 APK_REPO_DIR="/etc/apk/repositories.d"
 APK_KEYS_DIR="/etc/apk/keys"
-
-# RCI show/version для Keenetic (один раз за сессию)
-_rci_fetch() {
-  local json
-  [ "$RCI_CHECKED" = "1" ] && return 0
-  RCI_CHECKED=1
-  # busybox ash (OpenWrt) не парсит перенос строки, за которым идёт «||» —
-  # потому однострочные условия, а не «cmd \ || cmd».
-  json=$(curl -s --connect-timeout 2 --max-time 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
-  [ -n "$json" ] || json=$(wget -qO- -T 3 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
-  [ -n "$json" ] || return 0
-
-  ROUTER_MODEL=$(printf '%s' "$json" | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  ROUTER_TITLE=$(printf '%s' "$json" | sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  if printf '%s' "$json" | grep -q 'opkg-kmod-netfilter'; then
-    RCI_HAS_NF_KMOD=1
-  else
-    RCI_HAS_NF_KMOD=0
-  fi
-}
 
 detect_os() {
   [ "$OS_CHECKED" = "1" ] && return 0
@@ -109,20 +78,8 @@ detect_os() {
     ROUTER_OS="openwrt"
   elif command -v uci >/dev/null 2>&1 && [ -d /etc/config ]; then
     ROUTER_OS="openwrt"
-  elif command -v ndmc >/dev/null 2>&1 || [ -f /opt/etc/entware_release ]; then
-    ROUTER_OS="keenetic"
-  elif [ -f /etc/padavan_version ] || (command -v nvram >/dev/null 2>&1 && nvram get productid >/dev/null 2>&1); then
-    ROUTER_OS="padavan"
   else
-    # Проверка RCI Keenetic (порт 79)
-    local rci_test
-    rci_test=$(curl -s --connect-timeout 1 --max-time 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
-    [ -n "$rci_test" ] || rci_test=$(wget -qO- -T 1 "http://127.0.0.1:79/rci/show/version" 2>/dev/null)
-    if [ -n "$rci_test" ] && printf '%s' "$rci_test" | grep -q '"model"'; then
-      ROUTER_OS="keenetic"
-    else
-      ROUTER_OS="generic"
-    fi
+    ROUTER_OS="generic"
   fi
 
   case "$ROUTER_OS" in
@@ -181,29 +138,6 @@ detect_os() {
       INIT_BASE_DIR="/etc/init.d"
       STATUS_FILE="/usr/lib/opkg/status"
       OPKG_CONF_DIR="/etc/opkg"
-      ;;
-
-    keenetic)
-      ROUTER_OS_NAME="KeeneticOS"
-      CONF_BASE_DIR="/opt/etc"
-      INIT_BASE_DIR="/opt/etc/init.d"
-      STATUS_FILE="/opt/lib/opkg/status"
-      OPKG_CONF_DIR="/opt/etc/opkg"
-      ROUTER_FW_TYPE="iptables"
-      _rci_fetch
-      OS_HAS_NF_QUEUE="$RCI_HAS_NF_KMOD"
-      ;;
-
-    padavan)
-      ROUTER_OS_NAME="Padavan"
-      CONF_BASE_DIR="/opt/etc"
-      INIT_BASE_DIR="/opt/etc/init.d"
-      STATUS_FILE="/opt/lib/opkg/status"
-      OPKG_CONF_DIR="/opt/etc/opkg"
-      ROUTER_FW_TYPE="iptables"
-      OS_HAS_NF_QUEUE=1
-      ROUTER_MODEL=$(nvram get productid 2>/dev/null || echo "Padavan Device")
-      ROUTER_TITLE=$(cat /etc/padavan_version 2>/dev/null || echo "Padavan")
       ;;
 
     generic|*)
@@ -279,7 +213,6 @@ ui_apply_lang() {
       LBL_UTILS="УТИЛИТЫ"
       LBL_REMOVE="СЕРВИС"
       LBL_S1="Сжать bin/sbin (UPX)"
-      LBL_S2="Dropbear fix"
       LBL_U="Обновить все пакеты"
       LBL_1="Установка NFQWS / NFQWS2"
       LBL_3="Выбор стратегии"
@@ -324,7 +257,6 @@ ui_apply_lang() {
       LBL_UTILS="UTILITIES"
       LBL_REMOVE="SERVICE"
       LBL_S1="Compress bin/sbin (UPX)"
-      LBL_S2="Dropbear fix"
       LBL_U="Upgrade all packages"
       LBL_1="Install NFQWS / NFQWS2"
       LBL_3="Select strategy"
@@ -1087,17 +1019,13 @@ print_arch_line() {
   fi
   printf '\n'
 
-  if [ "$ROUTER_OS" = "openwrt" ]; then
+  if [ "$ROUTER_OS" = "openwrt" ] || [ "$ROUTER_OS" = "generic" ]; then
     if [ "$OS_HAS_NF_QUEUE" = "0" ]; then
       if [ "$ROUTER_FW_TYPE" = "fw4" ]; then
         printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите пакет kmod-nft-queue менеджером пакетов прошивки${NC}"
       else
         printf '%s\n' "${RED}${BOLD}[!] Модули ядра NFQUEUE не найдены. Установите пакеты kmod-ipt-nfqueue iptables-mod-nfqueue менеджером пакетов прошивки${NC}"
       fi
-    fi
-  elif [ "$ROUTER_OS" = "keenetic" ]; then
-    if [ "$RCI_HAS_NF_KMOD" = "0" ]; then
-      printf '%s\n' "${RED}${BOLD}[!] Через web-интерфейс Keenetic/Netcraze установить пакет «Модули ядра подсистемы Netfilter» (OPKG → Kernel modules for Netfilter).${NC}"
     fi
   fi
 }
@@ -1370,11 +1298,6 @@ show_installed() {
     extras="${extras}tool|dpi-detector|${dpi_ver:-ok}|
 "
   fi
-  if [ -f /opt/keenkit.sh ]; then
-    kk_ver=$(sed -n 's/^SCRIPT_VERSION=["'\'']\([^"'\'']*\)["'\''].*/\1/p' /opt/keenkit.sh 2>/dev/null | head -1)
-    extras="${extras}tool|KeenKit|${kk_ver:-ok}|
-"
-  fi
   if [ -x /opt/usr/bin/telemt ] || [ -x /opt/etc/init.d/S99telemt ] || [ -d /opt/etc/telemt ]; then
     _tm_ver=""
     [ -f /opt/etc/telemt/.version ] && _tm_ver=$(head -n1 /opt/etc/telemt/.version 2>/dev/null | tr -d ' \r\n')
@@ -1549,7 +1472,6 @@ show_installed() {
         m = mark_run(up) mark_upd("awg-manager", ("awg-manager" in opkg) ? opkg["awg-manager"] : "")
         row("awg-manager", aver, m)
       }
-      if ("KeenKit" in tools) row("KeenKit", tools["KeenKit"], "")
       if ("telemt" in tools) {
         m = mark_run(proc_has("telemt"))
         row("telemt", tools["telemt"], m)
@@ -2457,36 +2379,8 @@ update_lists() {
   info "Списки обновлены (auto.list не изменялся)."
 }
 
-# Восстановить строку VAR=… в конфиге (полная строка как была, без CRLF).
-# $1=conf  $2=имя переменной (POLICY_NAME)  $3=сохранённая строка целиком (POLICY_NAME="nfqws")
-restore_conf_var_line() {
-  local conf="$1" var="$2" line="$3"
-  [ -n "$line" ] || return 0
-  line=$(printf '%s' "$line" | tr -d '\r')
-  if grep -qE "^${var}=" "$conf" 2>/dev/null; then
-    sed -i "s|^${var}=.*|${line}|" "$conf"
-  elif grep -qE '^(POLICY_|ISP_INTERFACE=)' "$conf" 2>/dev/null; then
-    # вставить после последней строки POLICY_* / ISP_INTERFACE
-    awk -v line="$line" '
-      { buf[NR] = $0; if ($0 ~ /^(POLICY_|ISP_INTERFACE=)/) last = NR }
-      END {
-        n = NR
-        for (i = 1; i <= n; i++) {
-          print buf[i]
-          if (i == last) print line
-        }
-        if (!last) print line
-      }
-    ' "$conf" > "${conf}.new" && mv "${conf}.new" "$conf"
-  else
-    printf '%s\n' "$line" >> "$conf"
-  fi
-}
-
 apply_strategy() {
   local ver="$1" conf_name="$2" conf_path conf_dest tmp had_rkn=0 rkn_path
-  local saved_policy_name="" saved_policy_exclude="" had_policy=0
-  local pn_val pe_val policy_nondefault=0
   local init_script stopped_svc=0 cache_file saved_isp=""
 
   conf_dest=$(nfqws_conf_path "$ver")
@@ -2510,17 +2404,6 @@ apply_strategy() {
   if conf_has_rkn_hostlist "$conf_dest" "$ver"; then
     had_rkn=1
     info "В текущем конфиге есть привязка rkn.list — будет восстановлена после смены стратегии."
-  fi
-
-  # Сохранить POLICY_NAME / POLICY_EXCLUDE (стратегия обычно их затирает).
-  # Стандарт: POLICY_NAME="nfqws" POLICY_EXCLUDE=0 — без лишних сообщений в лог.
-  if grep -qE '^POLICY_NAME=' "$conf_dest" 2>/dev/null; then
-    saved_policy_name=$(grep -E '^POLICY_NAME=' "$conf_dest" 2>/dev/null | head -1 | tr -d '\r')
-    had_policy=1
-  fi
-  if grep -qE '^POLICY_EXCLUDE=' "$conf_dest" 2>/dev/null; then
-    saved_policy_exclude=$(grep -E '^POLICY_EXCLUDE=' "$conf_dest" 2>/dev/null | head -1 | tr -d '\r')
-    had_policy=1
   fi
 
   # ISP_INTERFACE из текущего конфига (до замены стратегией) — эталон для сравнения с route
@@ -2589,29 +2472,6 @@ apply_strategy() {
     return 1
   fi
   rm -f "$tmp"
-
-  # POLICY_*: стандарт (nfqws / 0) не трогаем; нестандартные — только по y/N
-  if [ "$had_policy" -eq 1 ]; then
-    pn_val=$(printf '%s' "${saved_policy_name#POLICY_NAME=}" | tr -d '\r"' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    pe_val=$(printf '%s' "${saved_policy_exclude#POLICY_EXCLUDE=}" | tr -d '\r"' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    policy_nondefault=0
-    [ -n "$saved_policy_name" ] && [ "$pn_val" != "nfqws" ] && policy_nondefault=1
-    [ -n "$saved_policy_exclude" ] && [ "$pe_val" != "0" ] && policy_nondefault=1
-
-    if [ "$policy_nondefault" -eq 1 ]; then
-      echo
-      info "Сохранённые POLICY_* отличаются от стандартных (nfqws / 0):"
-      [ -n "$saved_policy_name" ] && info "  $saved_policy_name"
-      [ -n "$saved_policy_exclude" ] && info "  $saved_policy_exclude"
-      if confirm_no "Восстановить эти POLICY_NAME / POLICY_EXCLUDE?"; then
-        [ -n "$saved_policy_name" ] && restore_conf_var_line "$conf_dest" "POLICY_NAME" "$saved_policy_name"
-        [ -n "$saved_policy_exclude" ] && restore_conf_var_line "$conf_dest" "POLICY_EXCLUDE" "$saved_policy_exclude"
-        info "POLICY_* восстановлены."
-      else
-        info "Восстановление POLICY_* пропущено."
-      fi
-    fi
-  fi
 
   echo
   info "=== Проверка ISP_INTERFACE / IPV6_ENABLED ==="
@@ -3507,200 +3367,8 @@ menu_dot_doh() {
 }
 
 # ---------------------------------------------------------------------------
-# 9. Управление DoT/DoH через ndmc
+# Данные DoH-серверов для OpenWrt
 # ---------------------------------------------------------------------------
-show_dns_servers() {
-  if ! command -v ndmc >/dev/null 2>&1; then
-    error "ndmc не найден. Функция доступна только на Keenetic/Netcraze OS."
-    return 1
-  fi
-
-  ndmc_cli "show dns-proxy" 2>/dev/null | awk -v c_reset="$NC" \
-    -v c_bold="$BOLD" -v c_cyan="$CYAN" -v c_green="$GREEN" \
-    -v c_yellow="$YELLOW" -v c_magenta="$MAGENTA" -v c_dim="$DIM" '
-    BEGIN {
-      dot_gen_cnt = 0; doh_gen_cnt = 0; dom_cnt = 0; dot_c = 0; doh_c = 0
-      scope = 0; in_filters = 0
-    }
-    /proxy-name:/ {
-      if ($0 ~ /System/) { scope = 1 }
-      else if (scope == 1) { scope = 2 }
-      next
-    }
-    scope != 1 { next }
-    /^[ \t]*proxy-tls-filters:/ || /^[ \t]*proxy-https-filters:/ {
-      if (in_dot && addr != "") commit_dot()
-      if (in_doh && uri != "") commit_doh()
-      in_filters = 1; in_dot = 0; in_doh = 0
-      addr = ""; sni = ""; uri = ""; domain = ""; reading_uri = 0
-      next
-    }
-    /^[ \t]*proxy-tls:/ || /^[ \t]*proxy-https:/ {
-      if (in_dot && addr != "") commit_dot()
-      if (in_doh && uri != "") commit_doh()
-      in_filters = 0; in_dot = 0; in_doh = 0
-      addr = ""; sni = ""; uri = ""; domain = ""; reading_uri = 0
-      next
-    }
-    /^[ \t]*server-tls:[ \t]*$/ {
-      if (in_filters) next
-      if (in_dot && addr != "") commit_dot()
-      in_dot = 1; in_doh = 0; reading_uri = 0
-      addr = ""; sni = ""; domain = ""; next
-    }
-    /^[ \t]*server-https:[ \t]*$/ {
-      if (in_filters) next
-      if (in_dot && addr != "") commit_dot()
-      if (in_doh && uri != "") commit_doh()
-      in_doh = 1; in_dot = 0; reading_uri = 0
-      addr = ""; sni = ""; uri = ""; domain = ""; next
-    }
-    in_dot && $1 ~ /^address:$/ { addr = $2; next }
-    in_dot && $1 ~ /^port:$/    { if ($2 != "" && $2 != "853") addr = addr ":" $2; next }
-    in_dot && $1 ~ /^sni:$/     { sni = $2; next }
-    in_dot && $1 ~ /^domain:$/  { domain = $2; next }
-    in_doh && $1 ~ /^uri:$/     { reading_uri = 1; uri = $2; next }
-    in_doh && reading_uri && ($1 ~ /^(format|spki|interface|domain):$/) { reading_uri = 0 }
-    in_doh && reading_uri { uri = uri $1; next }
-    in_doh && $1 ~ /^domain:$/  { domain = $2; reading_uri = 0; next }
-    END {
-      if (in_dot && addr != "") commit_dot()
-      if (in_doh && uri != "") commit_doh()
-      print c_cyan "┌────────────────────────────────────────────────────────┐" c_reset
-      print c_cyan "│" c_bold "          УПРАВЛЕНИЕ DNS СЕРВЕРАМИ KEENETIC             " c_cyan "│" c_reset
-      print c_cyan "└────────────────────────────────────────────────────────┘" c_reset
-      print "\n" c_bold c_magenta "  [ DoT Серверы ]" c_reset " " c_dim "[" dot_c+0 "/8]" c_reset
-      if (dot_gen_cnt == 0) print "  " c_dim "— нет общих серверов —" c_reset
-      for (i = 0; i < dot_gen_cnt; i++) print dot_gen[i]
-      print "\n" c_bold c_cyan "  [ DoH Серверы ]" c_reset " " c_dim "[" doh_c+0 "/8]" c_reset
-      if (doh_gen_cnt == 0) print "  " c_dim "— нет общих серверов —" c_reset
-      for (i = 0; i < doh_gen_cnt; i++) print doh_gen[i]
-      print "\n" c_bold c_yellow "  [ Персональные привязки к доменам ]" c_reset
-      if (dom_cnt == 0) print "  " c_dim "— привязки отсутствуют —" c_reset
-      for (i = 0; i < dom_cnt; i++) print dom_list[i]
-      print "\n" c_dim "────────────────────────────────────────────────────────" c_reset
-    }
-    function commit_dot() {
-      target = (sni != "") ? addr " " sni : addr
-      if (domain == "") {
-        key = "dot|" target
-        if (!(key in seen_gen)) { seen_gen[key] = 1; dot_gen[dot_gen_cnt++] = "  " c_cyan "🔒" c_reset " " target }
-      } else {
-        key = "dom|dot|" domain "|" target
-        if (!(key in seen_dom)) {
-          seen_dom[key] = 1
-          dom_list[dom_cnt++] = "  " c_yellow "🌐" c_reset " " sprintf("%-18s", domain) " " c_dim "➔" c_reset " " target " " c_magenta "[DoT]" c_reset
-        }
-      }
-      dot_c++; in_dot = 0; addr = ""; sni = ""; domain = ""
-    }
-    function commit_doh() {
-      gsub(/[ \t\r\n]/, "", uri)
-      if (uri == "") return
-      if (domain == "") {
-        key = "doh|" uri
-        if (!(key in seen_gen)) { seen_gen[key] = 1; doh_gen[doh_gen_cnt++] = "  " c_green "⚡" c_reset " " uri }
-      } else {
-        key = "dom|doh|" domain "|" uri
-        if (!(key in seen_dom)) {
-          seen_dom[key] = 1
-          dom_list[dom_cnt++] = "  " c_yellow "🌐" c_reset " " sprintf("%-18s", domain) " " c_dim "➔" c_reset " " uri " " c_cyan "[DoH]" c_reset
-        }
-      }
-      doh_c++; in_doh = 0; uri = ""; domain = ""; reading_uri = 0
-    }
-  '
-}
-
-dns_save_config() {
-  # Сохранение конфигурации роутера нужно только там, где она в ndmc;
-  # на OpenWrt изменения в файлах персистентны сами по себе.
-  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
-    return 0
-  fi
-  printf '%s' "Сохранение конфигурации..."
-  if ndmc_cli "system configuration save" > /dev/null 2>&1; then
-    printf ' %s\n' "${GREEN}[ГОТОВО]${NC}"
-  else
-    printf ' %s\n' "${RED}[ОШИБКА]${NC}"
-    warn "ndmc не смог сохранить конфигурацию"
-  fi
-  sleep 1
-}
-
-apply_dot() {
-  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
-    info "Привязка DNS через dns-proxy пропущена (доступно только на Keenetic/Netcraze)."
-    return 0
-  fi
-  local ip="$1" sni="$2" domain="$3" port="$4" cmd
-  cmd="dns-proxy tls upstream $ip"
-  [ -n "$port" ] && cmd="$cmd $port"
-  [ -n "$sni" ] && cmd="$cmd sni $sni"
-  [ -n "$domain" ] && cmd="$cmd domain $domain"
-  printf '%s\n' "${CYAN}Применение DoT ($ip):${NC} ndmc -c \"$cmd\""
-  ndmc_cli "$cmd" > /dev/null 2>&1 || warn "ndmc вернул ошибку при добавлении DoT $ip"
-}
-
-apply_doh() {
-  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
-    info "Привязка DNS через dns-proxy пропущена (доступно только на Keenetic/Netcraze)."
-    return 0
-  fi
-  local uri="$1" domain="$2" cmd
-  cmd="dns-proxy https upstream $uri"
-  [ -n "$domain" ] && cmd="$cmd domain $domain"
-  printf '%s\n' "${CYAN}Применение DoH ($uri):${NC} ndmc -c \"$cmd\""
-  ndmc_cli "$cmd" > /dev/null 2>&1 || warn "ndmc вернул ошибку при добавлении DoH $uri"
-}
-
-# Data-driven DoT: N|label|ip|sni|port
-# port пустой = default 853
-dot_servers_data() {
-  cat <<'EOF'
-1|Yandex Primary|77.88.8.8|common.dot.dns.yandex.net|
-2|Yandex Secondary|77.88.8.1|common.dot.dns.yandex.net|
-3|Cloudflare Standard Primary|1.1.1.1|cloudflare-dns.com|
-4|Cloudflare Standard Secondary|1.0.0.1|cloudflare-dns.com|
-5|Cloudflare Malware Primary|1.1.1.2|cloudflare-dns.com|
-6|Cloudflare Malware Secondary|1.0.0.2|cloudflare-dns.com|
-7|Cloudflare Malware+Adult Primary|1.1.1.3|cloudflare-dns.com|
-8|Cloudflare Malware+Adult Secondary|1.0.0.3|cloudflare-dns.com|
-9|Google Primary|8.8.8.8|dns.google|
-10|Google Secondary|8.8.4.4|dns.google|
-11|Quad9 Primary|9.9.9.9|dns.quad9.net|
-12|Quad9 Secondary|149.112.112.112|dns.quad9.net|
-13|CleanBrowsing Sec Filter 1|185.228.168.9|security-filter-dns.cleanbrowsing.org|853
-14|CleanBrowsing Sec Filter 2|185.228.169.9|security-filter-dns2.cleanbrowsing.org|853
-15|OpenDNS Primary|208.67.222.222|dns.opendns.com|
-16|OpenDNS Secondary|208.67.220.220|dns.opendns.com|
-17|AdGuard Default|94.140.14.14|dns.adguard-dns.com|
-18|AdGuard Family|94.140.14.15|family.adguard-dns.com|
-19|ControlD Free|p0.freedns.controld.com|p0.freedns.controld.com|
-20|DNS.SB Primary|185.222.222.222|dot.sb|
-21|DNS.SB Secondary|45.11.45.11|dot.sb|
-22|DNS4EU Protective|protective.joindns4.eu|protective.joindns4.eu|
-23|DNS4EU Unfiltered|unfiltered.joindns4.eu|unfiltered.joindns4.eu|
-24|OpenNameServer ns1|217.160.70.42|ns1.opennameserver.org|
-25|OpenNameServer ns2|213.202.211.221|ns2.opennameserver.org|
-26|OpenNameServer ns3|81.169.136.222|ns3.opennameserver.org|
-27|OpenNameServer ns4|185.181.61.24|ns4.opennameserver.org|
-28|IIJ Japan|public.dns.iij.jp|public.dns.iij.jp|
-29|Alibaba DNS|dns.alidns.com|dns.alidns.com|
-30|DNSPod|dot.pub|dot.pub|
-31|Xbox-DNS|xbox-dns.ru|xbox-dns.ru|
-32|Comss DNS|dns.comss.one|dns.comss.one|
-33|Malw Link|dns.malw.link|dns.malw.link|
-34|NullsProxy|dns.nullsproxy.com|dns.nullsproxy.com|
-35|Cloudflare Gateway|5u35p8m9i7.cloudflare-gateway.com|5u35p8m9i7.cloudflare-gateway.com|
-36|Geo Hide|geohide.ru|geohide.ru|
-37|AstraCat|dns.astracat.network|dns.astracat.network|
-38|Bezmezhau|dns.bezmezhau.com|dns.bezmezhau.com|
-39|DNS-AI|dns.dns-ai.ru|dns.dns-ai.ru|
-40|Mafioznik|dns.mafioznik.xyz|dns.mafioznik.xyz|
-41|Shecan Free|free.shecan.ir|free.shecan.ir|
-EOF
-}
 
 # Data-driven DoH: N|label|uri
 doh_servers_data() {
@@ -3739,389 +3407,10 @@ doh_servers_data() {
 EOF
 }
 
-add_dot_menu() {
-  echo
-  printf '%s\n' "${BOLD}Выбор DoT серверов (можно несколько через запятую, напр. 1,3,20):${NC}"
-  printf '%s\n' " ${YELLOW}--- Яндекс & Cloudflare & Google ---${NC}"
-  echo " 1) Yandex Primary (77.88.8.8)"
-  echo " 2) Yandex Secondary (77.88.8.1)"
-  echo " 3) Cloudflare Standard Primary (1.1.1.1)"
-  echo " 4) Cloudflare Standard Secondary (1.0.0.1)"
-  echo " 5) Cloudflare Malware Primary (1.1.1.2)"
-  echo " 6) Cloudflare Malware Secondary (1.0.0.2)"
-  echo " 7) Cloudflare Malware+Adult Primary (1.1.1.3)"
-  echo " 8) Cloudflare Malware+Adult Secondary (1.0.0.3)"
-  echo " 9) Google Primary (8.8.8.8)"
-  echo "10) Google Secondary (8.8.4.4)"
-  printf '%s\n' " ${YELLOW}--- Безопасность & Приватность ---${NC}"
-  echo "11) Quad9 Primary (9.9.9.9)"
-  echo "12) Quad9 Secondary (149.112.112.112)"
-  echo "13) CleanBrowsing Sec Filter 1 (185.228.168.9)"
-  echo "14) CleanBrowsing Sec Filter 2 (185.228.169.9)"
-  echo "15) OpenDNS Primary (208.67.222.222)"
-  echo "16) OpenDNS Secondary (208.67.220.220)"
-  echo "17) AdGuard Default (94.140.14.14)"
-  echo "18) AdGuard Family (94.140.14.15)"
-  echo "19) ControlD Free (p0.freedns.controld.com)"
-  echo "20) DNS.SB Primary (185.222.222.222)"
-  echo "21) DNS.SB Secondary (45.11.45.11)"
-  echo "22) DNS4EU Protective (protective.joindns4.eu)"
-  echo "23) DNS4EU Unfiltered (unfiltered.joindns4.eu)"
-  printf '%s\n' " ${YELLOW}--- OpenNameServer ---${NC}"
-  echo "24) OpenNameServer ns1 (217.160.70.42)"
-  echo "25) OpenNameServer ns2 (213.202.211.221)"
-  echo "26) OpenNameServer ns3 (81.169.136.222)"
-  echo "27) OpenNameServer ns4 (185.181.61.24)"
-  printf '%s\n' " ${YELLOW}--- Япония & Китай ---${NC}"
-  echo "28) IIJ Japan (public.dns.iij.jp)"
-  echo "29) Alibaba DNS (dns.alidns.com)"
-  echo "30) DNSPod (dot.pub)"
-  printf '%s\n' " ${GREEN}--- Proxy-DNS (Обход блокировок) ---${NC}"
-  echo "31) Xbox-DNS (xbox-dns.ru)"
-  echo "32) Comss DNS (dns.comss.one)"
-  echo "33) Malw Link (dns.malw.link)"
-  echo "34) NullsProxy (dns.nullsproxy.com)"
-  echo "35) Cloudflare Gateway (5u35p8m9i7.cloudflare-gateway.com)"
-  echo "36) Geo Hide (geohide.ru)"
-  echo "37) AstraCat (dns.astracat.network)"
-  echo "38) Bezmezhau (dns.bezmezhau.com)"
-  echo "39) DNS-AI (dns.dns-ai.ru)"
-  echo "40) Mafioznik (dns.mafioznik.xyz)"
-  echo "41) Shecan Free (free.shecan.ir)"
-  printf '%s\n' " ${YELLOW}--- Свой вариант ---${NC}"
-  echo "42) Ввести вручную (IP / Port / SNI)"
-  echo " 0) Отмена"
-  printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
-  ask "Выберите варианты: "
-  read -r raw_choices
-  [ -z "$raw_choices" ] || [ "$raw_choices" = "0" ] && return
 
-  ask "Привязать выбранные к домену? (пусто для всех): "
-  read -r domain
 
-  local added_any=0 choice num label ip sni port
-  for choice in $(echo "$raw_choices" | tr ',' ' '); do
-    if [ "$choice" = "42" ]; then
-      ask "Введите IP/Хост: "; read -r manual_ip
-      ask "Введите Порт (по умолчанию 853, отмена - Enter): "; read -r manual_port
-      ask "Введите SNI (отмена - Enter): "; read -r manual_sni
-      if [ -n "$manual_ip" ]; then
-        apply_dot "$manual_ip" "$manual_sni" "$domain" "$manual_port"
-        added_any=1
-      fi
-      continue
-    fi
-    line=$(dot_servers_data | grep -E "^${choice}\|")
-    [ -n "$line" ] || continue
-    # N|label|ip|sni|port
-    num=$(echo "$line" | cut -d'|' -f1)
-    ip=$(echo "$line" | cut -d'|' -f3)
-    sni=$(echo "$line" | cut -d'|' -f4)
-    port=$(echo "$line" | cut -d'|' -f5)
-    apply_dot "$ip" "$sni" "$domain" "$port"
-    added_any=1
-  done
-  [ "$added_any" -eq 1 ] && dns_save_config
-}
 
-add_doh_menu() {
-  echo
-  printf '%s\n' "${BOLD}Выбор DoH серверов (можно несколько через запятую, напр. 1,3,13):${NC}"
-  printf '%s\n' " ${YELLOW}--- Яндекс & Cloudflare & Google ---${NC}"
-  echo " 1) Yandex Primary (https://77.88.8.8/dns-query)"
-  echo " 2) Yandex Secondary (https://77.88.8.1/dns-query)"
-  echo " 3) Cloudflare (https://cloudflare-dns.com/dns-query)"
-  echo " 4) Google (https://dns.google/dns-query)"
-  printf '%s\n' " ${YELLOW}--- Безопасность & Приватность ---${NC}"
-  echo " 5) Quad9 (https://dns.quad9.net/dns-query)"
-  echo " 6) CleanBrowsing (https://doh.cleanbrowsing.org/doh/security-filter/)"
-  echo " 7) OpenDNS (https://doh.opendns.com/dns-query)"
-  echo " 8) AdGuard Default (https://dns.adguard-dns.com/dns-query)"
-  echo " 9) AdGuard Family (https://family.adguard-dns.com/dns-query)"
-  echo "10) ControlD Free (https://freedns.controld.com/p0)"
-  echo "11) DNS.SB (https://doh.dns.sb/dns-query)"
-  echo "12) DNS4EU Protective (https://protective.joindns4.eu/dns-query)"
-  echo "13) DNS4EU Unfiltered (https://unfiltered.joindns4.eu/dns-query)"
-  printf '%s\n' " ${YELLOW}--- OpenNameServer ---${NC}"
-  echo "14) OpenNameServer ns1 (https://ns1.opennameserver.org/dns-query)"
-  echo "15) OpenNameServer ns2 (https://ns2.opennameserver.org/dns-query)"
-  echo "16) OpenNameServer ns3 (https://ns3.opennameserver.org/dns-query)"
-  echo "17) OpenNameServer ns4 (https://ns4.opennameserver.org/dns-query)"
-  printf '%s\n' " ${YELLOW}--- Япония & Китай ---${NC}"
-  echo "18) IIJ Japan (https://public.dns.iij.jp/dns-query)"
-  echo "19) Alibaba DNS (https://dns.alidns.com/dns-query)"
-  echo "20) DNSPod (https://doh.pub/dns-query)"
-  printf '%s\n' " ${GREEN}--- Proxy-DNS (Обход блокировок) ---${NC}"
-  echo "21) Xbox-DNS (https://xbox-dns.ru/dns-query)"
-  echo "22) Comss DNS Keenetic/MikroTik (https://dns.comss.one/dns-query)"
-  echo "23) Malw Link (https://dns.malw.link/dns-query)"
-  echo "24) NullsProxy (https://dns.nullsproxy.com/dns-query)"
-  echo "25) Cloudflare Gateway (https://5u35p8m9i7.cloudflare-gateway.com/dns-query)"
-  echo "26) Geo Hide (https://dns.geohide.ru/dns-query)"
-  echo "27) AstraCat (https://dns.astracat.network/dns-query)"
-  echo "28) Bezmezhau (https://dns.bezmezhau.com/dns-query)"
-  echo "29) DNS-AI (https://dns.dns-ai.ru/dns-query)"
-  echo "30) Mafioznik (https://dns.mafioznik.xyz/dns-query)"
-  echo "31) Shecan Free (https://free.shecan.ir/dns-query)"
-  printf '%s\n' " ${YELLOW}--- Свой вариант ---${NC}"
-  echo "32) Ввести вручную (произвольный URI)"
-  echo " 0) Отмена"
-  printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
-  ask "Выберите варианты: "
-  read -r raw_choices
-  [ -z "$raw_choices" ] || [ "$raw_choices" = "0" ] && return
 
-  ask "Привязать выбранные к домену? (пусто для всех): "
-  read -r domain
-
-  local added_any=0 choice line uri
-  for choice in $(echo "$raw_choices" | tr ',' ' '); do
-    if [ "$choice" = "32" ]; then
-      ask "Введите URI DoH сервера: "; read -r manual_uri
-      if [ -n "$manual_uri" ]; then
-        apply_doh "$manual_uri" "$domain"
-        added_any=1
-      fi
-      continue
-    fi
-    line=$(doh_servers_data | grep -E "^${choice}\|")
-    [ -n "$line" ] || continue
-    uri=$(echo "$line" | cut -d'|' -f3)
-    apply_doh "$uri" "$domain"
-    added_any=1
-  done
-  [ "$added_any" -eq 1 ] && dns_save_config
-}
-
-add_domain_menu() {
-  echo
-  printf '%s\n' "${BOLD}Быстрая привязка DNS к целевым доменам (можно несколько через запятую, напр. 1,3,5):${NC}"
-  echo " 1) CleanBrowsing DoT (185.228.168.9 + SNI) ➔ instagram.com"
-  echo " 2) CleanBrowsing DoH (doh.cleanbrowsing.org) ➔ instagram.com"
-  echo " 3) CleanBrowsing DoT (185.228.168.9 + SNI) ➔ cdninstagram.com"
-  echo " 4) CleanBrowsing DoH (doh.cleanbrowsing.org) ➔ cdninstagram.com"
-  echo " 5) sw.ext.io DoT ➔ rutor.is & rutor.info"
-  echo " 6) Malw Link DoH (dns.malw.link) ➔ ntc.party"
-  echo " 7) Xbox-DNS DoT ➔ gql.twitch.tv & usher.ttvnw.net"
-  echo " 8) Xbox-DNS DoH ➔ gql.twitch.tv & usher.ttvnw.net"
-  echo " 9) NullsProxy DoT ➔ Supercell (Brawl/CoC/CR)"
-  echo "10) NullsProxy DoH ➔ Supercell (Brawl/CoC/CR)"
-  echo "11) Ввести свой домен и выбрать сервер"
-  echo " 0) Отмена"
-  printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
-  ask "Выберите варианты: "
-  read -r raw_choices
-  [ -z "$raw_choices" ] || [ "$raw_choices" = "0" ] && return
-
-  local added_any=0 choice
-  for choice in $(echo "$raw_choices" | tr ',' ' '); do
-    case $choice in
-      1) apply_dot "185.228.168.9" "security-filter-dns.cleanbrowsing.org" "instagram.com" "853"; added_any=1 ;;
-      2) apply_doh "https://doh.cleanbrowsing.org/doh/security-filter/" "instagram.com"; added_any=1 ;;
-      3) apply_dot "185.228.168.9" "security-filter-dns.cleanbrowsing.org" "cdninstagram.com" "853"; added_any=1 ;;
-      4) apply_doh "https://doh.cleanbrowsing.org/doh/security-filter/" "cdninstagram.com"; added_any=1 ;;
-      5)
-        apply_dot "sw.ext.io" "" "rutor.is"
-        apply_dot "sw.ext.io" "" "rutor.info"
-        added_any=1
-        ;;
-      6) apply_doh "https://dns.malw.link/dns-query" "ntc.party"; added_any=1 ;;
-      7)
-        apply_dot "xbox-dns.ru" "xbox-dns.ru" "gql.twitch.tv"
-        apply_dot "xbox-dns.ru" "xbox-dns.ru" "usher.ttvnw.net"
-        added_any=1
-        ;;
-      8)
-        apply_doh "https://xbox-dns.ru/dns-query" "gql.twitch.tv"
-        apply_doh "https://xbox-dns.ru/dns-query" "usher.ttvnw.net"
-        added_any=1
-        ;;
-      9)
-        # Supercell via NullsProxy DoT
-        apply_dot "dns.nullsproxy.com" "dns.nullsproxy.com" "supercell.com"
-        apply_dot "dns.nullsproxy.com" "dns.nullsproxy.com" "supercellid.com"
-        apply_dot "dns.nullsproxy.com" "dns.nullsproxy.com" "brawlstarsgame.com"
-        apply_dot "dns.nullsproxy.com" "dns.nullsproxy.com" "clashofclans.com"
-        apply_dot "dns.nullsproxy.com" "dns.nullsproxy.com" "clashroyaleapp.com"
-        added_any=1
-        ;;
-      10)
-        # Supercell via NullsProxy DoH
-        apply_doh "https://dns.nullsproxy.com/dns-query" "supercell.com"
-        apply_doh "https://dns.nullsproxy.com/dns-query" "supercellid.com"
-        apply_doh "https://dns.nullsproxy.com/dns-query" "brawlstarsgame.com"
-        apply_doh "https://dns.nullsproxy.com/dns-query" "clashofclans.com"
-        apply_doh "https://dns.nullsproxy.com/dns-query" "clashroyaleapp.com"
-        added_any=1
-        ;;
-      11)
-        ask "Введите домен (например: example.com): "; read -r dom
-        [ -z "$dom" ] && continue
-        echo "Тип протокола: 1) DoT  2) DoH"
-        ask "Выберите [1-2]: "; read -r ptype
-        if [ "$ptype" = "1" ]; then
-          ask "Введите IP/Хост DoT: "; read -r dot_ip
-          ask "Введите SNI (необязательно): "; read -r dot_sni
-          ask "Введите порт (по умолчанию 853, Enter - пропустить): "; read -r dot_port
-          [ -n "$dot_ip" ] && { apply_dot "$dot_ip" "$dot_sni" "$dom" "$dot_port"; added_any=1; }
-        elif [ "$ptype" = "2" ]; then
-          ask "Введите URI DoH: "; read -r doh_uri
-          [ -n "$doh_uri" ] && { apply_doh "$doh_uri" "$dom"; added_any=1; }
-        fi
-        ;;
-    esac
-  done
-  [ "$added_any" -eq 1 ] && dns_save_config
-}
-
-remove_dns_menu() {
-  local tmp_list="/tmp/dns_rem_list.txt"
-  rm -f "$tmp_list"
-
-  ndmc_cli "show dns-proxy" 2>/dev/null | awk '
-    /server-tls:/ {
-      if (in_dot && addr != "") {
-        p = (port != "") ? port : "853"
-        key = addr "|" p
-        if (!(key in dot_order)) { dot_addrs[dot_cnt++] = key; dot_order[key] = 1 }
-        if (domain != "") {
-          dom_key = key "|" domain
-          if (!(dom_key in dot_dom_seen)) {
-            dot_dom_seen[dom_key] = 1
-            dot_doms[key] = (dot_doms[key] != "") ? dot_doms[key] ", " domain : domain
-          }
-        }
-      }
-      in_dot=1; in_doh=0; addr=""; port=""; domain=""; next
-    }
-    in_dot && /address:/ { addr=$2 }
-    in_dot && /port:/ { port=$2 }
-    in_dot && /domain:/ { domain=$2 }
-    /server-https:/ {
-      if (in_dot && addr != "") {
-        p = (port != "") ? port : "853"
-        key = addr "|" p
-        if (!(key in dot_order)) { dot_addrs[dot_cnt++] = key; dot_order[key] = 1 }
-        if (domain != "") {
-          dom_key = key "|" domain
-          if (!(dom_key in dot_dom_seen)) {
-            dot_dom_seen[dom_key] = 1
-            dot_doms[key] = (dot_doms[key] != "") ? dot_doms[key] ", " domain : domain
-          }
-        }
-      }
-      if (in_doh && uri != "") {
-        gsub(/[ \t\r\n]/, "", uri)
-        if (!(uri in doh_order)) { doh_addrs[doh_cnt++] = uri; doh_order[uri] = 1 }
-        if (domain != "") {
-          dom_key = uri "|" domain
-          if (!(dom_key in doh_dom_seen)) {
-            doh_dom_seen[dom_key] = 1
-            doh_doms[uri] = (doh_doms[uri] != "") ? doh_doms[uri] ", " domain : domain
-          }
-        }
-      }
-      in_doh=1; in_dot=0; addr=""; port=""; uri=""; domain=""; next
-    }
-    in_doh && /uri:/ { reading_uri=1; uri=$2; next }
-    in_doh && reading_uri && (/format:/ || /spki:/ || /interface:/ || /domain:/) { reading_uri=0 }
-    in_doh && reading_uri { uri=uri $1 }
-    in_doh && /domain:/ { domain=$2 }
-    END {
-      if (in_dot && addr != "") {
-        p = (port != "") ? port : "853"
-        key = addr "|" p
-        if (!(key in dot_order)) { dot_addrs[dot_cnt++] = key; dot_order[key] = 1 }
-        if (domain != "") {
-          dom_key = key "|" domain
-          if (!(dom_key in dot_dom_seen)) {
-            dot_dom_seen[dom_key] = 1
-            dot_doms[key] = (dot_doms[key] != "") ? dot_doms[key] ", " domain : domain
-          }
-        }
-      }
-      if (in_doh && uri != "") {
-        gsub(/[ \t\r\n]/, "", uri)
-        if (!(uri in doh_order)) { doh_addrs[doh_cnt++] = uri; doh_order[uri] = 1 }
-        if (domain != "") {
-          dom_key = uri "|" domain
-          if (!(dom_key in doh_dom_seen)) {
-            doh_dom_seen[dom_key] = 1
-            doh_doms[uri] = (doh_doms[uri] != "") ? doh_doms[uri] ", " domain : domain
-          }
-        }
-      }
-      idx = 1
-      for (i = 0; i < dot_cnt; i++) {
-        split(dot_addrs[i], parts, "|")
-        print idx " | dot | " parts[1] " | " parts[2] " | " dot_doms[dot_addrs[i]]
-        idx++
-      }
-      for (i = 0; i < doh_cnt; i++) {
-        u = doh_addrs[i]
-        print idx " | doh | " u " | | " doh_doms[u]
-        idx++
-      }
-    }
-  ' > "$tmp_list"
-
-  if [ ! -s "$tmp_list" ]; then
-    echo
-    warn "Нет настроенных DNS серверов для удаления."
-    sleep 1
-    return
-  fi
-
-  echo
-  printf '%s\n' "${BOLD}${RED}Список настроенных серверов для удаления:${NC}"
-  while IFS='|' read -r num type target port doms; do
-    num=$(echo "$num" | xargs)
-    type=$(echo "$type" | xargs)
-    target=$(echo "$target" | xargs)
-    port=$(echo "$port" | xargs)
-    doms=$(echo "$doms" | xargs)
-    label_type=""
-    [ "$type" = "dot" ] && label_type="${MAGENTA}[DoT]${NC}"
-    [ "$type" = "doh" ] && label_type="${CYAN}[DoH]${NC}"
-    dom_info=""
-    [ -n "$doms" ] && dom_info=" ${YELLOW}(domains: $doms)${NC}"
-    printf ' %s%s)%s %s %s%s\n' "$BOLD" "$num" "$NC" "$label_type" "$target" "$dom_info"
-  done < "$tmp_list"
-
-  echo " 0) Отмена"
-  printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
-  ask "Выберите номера для удаления (можно несколько через запятую): "
-  read -r raw_choices
-  [ -z "$raw_choices" ] || [ "$raw_choices" = "0" ] && { rm -f "$tmp_list"; return; }
-
-  local removed_any=0 choice line type target port cmd
-  for choice in $(echo "$raw_choices" | tr ',' ' '); do
-    line=$(grep -E "^$choice \|" "$tmp_list")
-    [ -n "$line" ] || continue
-    type=$(echo "$line" | awk -F'|' '{print $2}' | xargs)
-    target=$(echo "$line" | awk -F'|' '{print $3}' | xargs)
-    port=$(echo "$line" | awk -F'|' '{print $4}' | xargs)
-    if [ "$type" = "dot" ]; then
-      if [ -n "$port" ] && [ "$port" != "853" ]; then
-        cmd="no dns-proxy tls upstream $target $port"
-      else
-        cmd="no dns-proxy tls upstream $target"
-      fi
-    elif [ "$type" = "doh" ]; then
-      cmd="no dns-proxy https upstream $target"
-    else
-      continue
-    fi
-    printf '%s\n' "${RED}Удаление:${NC} ndmc -c \"$cmd\""
-    if ndmc_cli "$cmd" > /dev/null 2>&1; then
-      removed_any=1
-    else
-      warn "ndmc не смог удалить: $target"
-    fi
-  done
-  rm -f "$tmp_list"
-  [ "$removed_any" -eq 1 ] && dns_save_config
-}
 
 # ---------------------------------------------------------------------------
 # Управление DoT/DoH — OpenWrt: https-dns-proxy (DoH) + dnsmasq per-domain.
@@ -4455,7 +3744,7 @@ EOF
   [ "$added_any" -eq 1 ] || info "Ничего не добавлено."
 }
 
-menu_dns_manage_openwrt() {
+menu_dns_manage() {
   while true; do
     clear 2>/dev/null || true
     show_dns_servers_openwrt
@@ -4480,48 +3769,11 @@ menu_dns_manage_openwrt() {
   done
 }
 
-menu_dns_manage() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    menu_dns_manage_openwrt
-    return 0
-  fi
-  if ! command -v ndmc >/dev/null 2>&1; then
-    error "ndmc не найден. Управление DoT/DoH доступно только на Keenetic/Netcraze OS."
-    return 1
-  fi
-  while true; do
-    clear 2>/dev/null || true
-    show_dns_servers
-    echo
-    printf '%s\n' " ${BOLD}1)${NC} Добавить DoT сервер(ы)"
-    printf '%s\n' " ${BOLD}2)${NC} Добавить DoH сервер(ы)"
-    printf '%s\n' " ${BOLD}3)${NC} ${YELLOW}Привязать домен к DNS (Пресеты)${NC}"
-    printf '%s\n' " ${BOLD}4)${NC} ${RED}Удалить сервер(ы)${NC}"
-    printf '%s\n' " ${BOLD}0)${NC} ${LBL_BACK_ITEM}"
-    printf '%s\n' "${DIM}────────────────────────────────────────────────────────${NC}"
-    ask "${LBL_YOUR_CHOICE} [0]: "
-    read -r choice
-    case $choice in
-      1) add_dot_menu ;;
-      2) add_doh_menu ;;
-      3) add_domain_menu ;;
-      4) remove_dns_menu ;;
-      0|"") return 0 ;;
-      *) warn "Неверный ввод, попробуйте снова."; sleep 1 ;;
-    esac
-  done
-}
-
 # ---------------------------------------------------------------------------
-# 8. Обновление hosts (статические DNS-записи)
-# Keenetic: «ip host» через ndmc; OpenWrt: блок в /etc/hosts (dnsmasq)
+# 8. Обновление hosts (статические DNS-записи в /etc/hosts)
 # ---------------------------------------------------------------------------
 HOSTS_MARK_BEGIN="# >>> nfqws-menu hosts >>>"
 HOSTS_MARK_END="# <<< nfqws-menu hosts <<<"
-
-hosts_backend() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then echo "openwrt"; else echo "keenetic"; fi
-}
 
 reload_dns_service() {
   if [ -x /etc/init.d/dnsmasq ]; then
@@ -4546,114 +3798,56 @@ hosts_existing_pairs() {
 
 # Текущие статические записи — форматированные строки на stdout
 host_entries_view() {
-  if [ "$(hosts_backend)" = "openwrt" ]; then
-    [ -r /etc/hosts ] || return 0
-    local ip domain
-    while IFS="$(printf '\t')" read -r ip domain || [ -n "$ip" ]; do
-      [ -n "$ip" ] && [ -n "$domain" ] || continue
-      printf '  %s%-40s%s %s➔%s %s\n' "$CYAN" "$domain" "$NC" "$DIM" "$NC" "$ip"
-    done <<EOF
+  [ -r /etc/hosts ] || return 0
+  local ip domain
+  while IFS="$(printf '\t')" read -r ip domain || [ -n "$ip" ]; do
+    [ -n "$ip" ] && [ -n "$domain" ] || continue
+    printf '  %s%-40s%s %s➔%s %s\n' "$CYAN" "$domain" "$NC" "$DIM" "$NC" "$ip"
+  done <<EOF
 $(hosts_existing_pairs)
 EOF
-    return 0
-  fi
-  local view_out line
-  view_out=$(ndmc_cli "show running-config" 2>/dev/null)
-  [ -n "$view_out" ] || view_out=$(ndmc_cli "show run" 2>/dev/null)
-  [ -n "$view_out" ] || return 0
-  printf '%s\n' "$view_out" | grep -E '^[[:space:]]*ip host[[:space:]]' | while IFS= read -r line || [ -n "$line" ]; do
-    set -- $line
-    if [ "$1" = "ip" ] && [ "$2" = "host" ] && [ -n "$3" ] && [ -n "$4" ]; then
-      printf '  %s%-40s%s %s➔%s %s\n' "$CYAN" "$3" "$NC" "$DIM" "$NC" "$4"
-    fi
-  done
 }
 
 # Удалить все записи; $1 = файл со списком доменов
 host_entries_delete_all() {
-  if [ "$(hosts_backend)" = "openwrt" ]; then
-    if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
-      hosts_strip_block /etc/hosts > /etc/hosts.nfqws.tmp
-      cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
-      reload_dns_service
-      info "Блок nfqws-menu удалён из /etc/hosts."
-    else
-      info "Записей nfqws-menu в /etc/hosts нет."
-    fi
-    return 0
-  fi
-  local removed=0 failed=0 domain cmd
-  while IFS= read -r domain || [ -n "$domain" ]; do
-    [ -z "$domain" ] && continue
-    cmd="no ip host $domain"
-    printf '%s\n' "${CYAN}  ndmc -c \"$cmd\"${NC}"
-    if ndmc_cli "$cmd" > /dev/null 2>&1; then
-      removed=$((removed + 1))
-    else
-      warn "  ошибка: $domain"
-      failed=$((failed + 1))
-    fi
-  done < "$1"
-  info "Удалено: $removed, ошибок: $failed"
-  if [ "$removed" -gt 0 ] || [ "$failed" -gt 0 ]; then
-    dns_save_config
+  if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
+    hosts_strip_block /etc/hosts > /etc/hosts.nfqws.tmp
+    cat /etc/hosts.nfqws.tmp > /etc/hosts && rm -f /etc/hosts.nfqws.tmp
+    reload_dns_service
+    info "Блок nfqws-menu удалён из /etc/hosts."
+  else
+    info "Записей nfqws-menu в /etc/hosts нет."
   fi
 }
 
 # Применить записи; $1 = файл пар «IP<TAB>DOMAIN»
 host_entries_apply() {
-  if [ "$(hosts_backend)" = "openwrt" ]; then
-    [ -f /etc/hosts ] || : > /etc/hosts
-    local block="/tmp/nfqws-hosts-block-$$.tmp" merged="/tmp/nfqws-hosts-merge-$$.txt" n_dom
-    # сливаем с уже добавленным блоком: на Keenetic «ip host» накапливается,
-    # а замена блока целиком молча стирала записи, добавленные ранее
-    hosts_existing_pairs > "$merged"
-    cat "$1" >> "$merged"
-    {
-      printf '%s\n' "$HOSTS_MARK_BEGIN"
-      # при повторе домена побеждает более позднее значение (новый IP)
-      awk -F '\t' '
-        NF >= 2 && $1 != "" && $2 != "" {
-          if (!($2 in seen)) { seen[$2] = 1; order[++n] = $2 }
-          dom[$2] = $1
-        }
-        END { for (i = 1; i <= n; i++) print dom[order[i]] " " order[i] }
-      ' "$merged" > "${block}.body"
-      cat "${block}.body"
-      printf '%s\n' "$HOSTS_MARK_END"
-    } > "$block"
-    n_dom=$(wc -l < "${block}.body" 2>/dev/null | tr -d ' ')
-    hosts_strip_block /etc/hosts > "${block}.base"
-    cat "${block}.base" "$block" > /etc/hosts
-    rm -f "$block" "${block}.base" "${block}.body" "$merged"
-    info "Записано: /etc/hosts (доменов в блоке: ${n_dom:-0})."
-    reload_dns_service
-    return 0
-  fi
-  local added=0 failed=0 ip domain cmd
-  while IFS="$(printf '\t')" read -r ip domain || [ -n "$ip" ]; do
-    [ -z "$ip" ] || [ -z "$domain" ] && continue
-    cmd="ip host $domain $ip"
-    printf '%s\n' "${CYAN}  ndmc -c \"$cmd\"${NC}"
-    if ndmc_cli "$cmd" > /dev/null 2>&1; then
-      added=$((added + 1))
-    else
-      warn "  ошибка: $domain → $ip"
-      failed=$((failed + 1))
-    fi
-  done < "$1"
-  info "Добавлено: $added, ошибок: $failed"
-  if [ "$added" -gt 0 ] || [ "$failed" -gt 0 ]; then
-    dns_save_config
-  fi
+  [ -f /etc/hosts ] || : > /etc/hosts
+  local block="/tmp/nfqws-hosts-block-$$.tmp" merged="/tmp/nfqws-hosts-merge-$$.txt" n_dom
+  hosts_existing_pairs > "$merged"
+  cat "$1" >> "$merged"
+  {
+    printf '%s\n' "$HOSTS_MARK_BEGIN"
+    # при повторе домена побеждает более позднее значение (новый IP)
+    awk -F '\t' '
+      NF >= 2 && $1 != "" && $2 != "" {
+        if (!($2 in seen)) { seen[$2] = 1; order[++n] = $2 }
+        dom[$2] = $1
+      }
+      END { for (i = 1; i <= n; i++) print dom[order[i]] " " order[i] }
+    ' "$merged" > "${block}.body"
+    cat "${block}.body"
+    printf '%s\n' "$HOSTS_MARK_END"
+  } > "$block"
+  n_dom=$(wc -l < "${block}.body" 2>/dev/null | tr -d ' ')
+  hosts_strip_block /etc/hosts > "${block}.base"
+  cat "${block}.base" "$block" > /etc/hosts
+  rm -f "$block" "${block}.base" "${block}.body" "$merged"
+  info "Записано: /etc/hosts (доменов в блоке: ${n_dom:-0})."
+  reload_dns_service
 }
 
 menu_update_hosts() {
-  if [ "$(hosts_backend)" = "keenetic" ] && ! command -v ndmc >/dev/null 2>&1; then
-    error "ndmc не найден. Функция доступна только на Keenetic/Netcraze OS."
-    return 1
-  fi
-
   local hosts_url="${RAW_BASE}/hosts"
   local tmp="/tmp/nfqws-hosts-$$.txt"
   local sec_file="/tmp/nfqws-hosts-sec-$$.txt"
@@ -4803,7 +3997,7 @@ $name"
   local pairs="/tmp/nfqws-hosts-pairs-$$.txt"
   : > "$pairs"
 
-  # Собираем IP\tDOMAIN: только IPv4, валидный домен (Keenetic ip host ≈64 записей)
+  # Собираем IP\tDOMAIN: только IPv4, валидный домен
   local sec
   # имена секций могут содержать пробелы — читаем построчно, не через word splitting
   while IFS= read -r sec || [ -n "$sec" ]; do
@@ -4842,9 +4036,6 @@ $name"
 
   local n_pairs
   n_pairs=$(wc -l < "$pairs_uniq" | tr -d ' ')
-  if [ "$(hosts_backend)" = "keenetic" ] && [ "$n_pairs" -gt 64 ]; then
-    warn "Keenetic допускает до 64 записей ip host (сейчас $n_pairs). Часть может не добавиться."
-  fi
 
   host_entries_apply "$pairs_uniq"
 
@@ -4924,7 +4115,6 @@ update_self() {
 # ---------------------------------------------------------------------------
 DPI_DETECTOR_INSTALL_URL="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh"
 AWG_MANAGER_INSTALL_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh"
-KEENKIT_INSTALL_URL="https://raw.githubusercontent.com/spatiumstas/KeenKit/main/install.sh"
 
 # dpi-detector сам выбирает каталог: /opt/bin (Entware/Keenetic) или
 # /usr/local/bin (OpenWrt — персистентный overlay)
@@ -4984,23 +4174,6 @@ menu_dpi_detector() {
 menu_awg_manager() {
   require_entware || return 1
   run_menu_remote_sh "11" "awg-manager" "$AWG_MANAGER_INSTALL_URL" || return 1
-}
-
-menu_keenkit() {
-  if [ -f /opt/keenkit.sh ]; then
-    echo
-    info "Открываем: 12. KeenKit"
-    info "Локально: /opt/keenkit.sh"
-    printf '%s\n' "================================================"
-    if [ -c /dev/tty ]; then
-      sh /opt/keenkit.sh </dev/tty
-    else
-      sh /opt/keenkit.sh
-    fi
-    return 0
-  fi
-  # install.sh KeenKit — короткий bootstrap (~900 Б), скачивает keenkit.sh
-  run_menu_remote_sh "12" "KeenKit" "$KEENKIT_INSTALL_URL" 500 || return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -5857,14 +5030,6 @@ remove_usque_keenetic() {
   [ -f /opt/etc/opkg/usque-keenetic.conf ] && rm -f /opt/etc/opkg/usque-keenetic.conf && info "  удалён: /opt/etc/opkg/usque-keenetic.conf"
 }
 
-remove_keenkit() {
-  if [ -f /opt/keenkit.sh ]; then
-    rm -f /opt/keenkit.sh && info "  удалён: /opt/keenkit.sh"
-    info "KeenKit удалён."
-  else
-    warn "KeenKit не найден (/opt/keenkit.sh)."
-  fi
-}
 
 remove_magitrickle() {
   local mag_init="/opt/etc/init.d/S99magitrickle"
@@ -6329,7 +5494,6 @@ menu_remove() {
   is_installed "usque-keenetic"     && items="$items usque-keenetic"
   is_installed "magitrickle"        && items="$items magitrickle"
   is_installed "opera-proxy"        && items="$items opera-proxy"
-  [ -f /opt/keenkit.sh ]            && items="$items KeenKit"
   is_telemt_installed               && items="$items telemt"
 
   if [ -n "$items" ]; then
@@ -6376,7 +5540,6 @@ menu_remove() {
         usque-keenetic) remove_usque_keenetic ;;
         magitrickle)   remove_magitrickle ;;
         opera-proxy)   remove_opera_proxy ;;
-        KeenKit)       remove_keenkit ;;
         telemt)        remove_telemt ;;
         nfqws-keenetic|nfqws2-keenetic)
           remove_nfqws_pkg "$target" || true
@@ -6457,117 +5620,11 @@ service_upx_compress() {
   info "Готово."
 }
 
-# dropbear_fix (логика sw.ext.io): правки conf/init + restart Entware dropbear.
-# Важно: stop убивает текущую SSH-сессию. Обычный фон (…&) получает SIGHUP и
-# часто не доходит до start. Делаем conf-правки сейчас, restart — через nohup/trap HUP.
-service_dropbear_fix() {
-  local conf="/opt/etc/config/dropbear.conf"
-  local init="/opt/etc/init.d/S51dropbear"
-  local log="/tmp/dropbear_fix.log"
-  local reset=0 port="" bin=""
-
-  echo
-  info "$LBL_S2"
-  echo "  1) Без сброса пароля"
-  echo "  2) Со сбросом пароля (root → keenetic)"
-  echo "  0) ${LBL_BACK_ITEM}"
-  echo
-  ask "${LBL_YOUR_CHOICE} [0]: "
-  read_menu dchoice
-  case "$dchoice" in
-    1) reset=0 ;;
-    2)
-      if ! confirm_no "Сбросить пароль root Entware на keenetic?"; then
-        info "Отменено."
-        return 0
-      fi
-      reset=1
-      ;;
-    0|"") return 0 ;;
-    *) warn "Неверный выбор."; return 0 ;;
-  esac
-
-  if [ ! -x "$init" ] && [ ! -f "$init" ]; then
-    error "Не найден $init — Entware dropbear не установлен?"
-    return 1
-  fi
-  if [ ! -f "$conf" ]; then
-    error "Не найден $conf"
-    return 1
-  fi
-
-  # --- правки конфига, пока SSH ещё жив ---
-  if grep -q '^PORT=22$' "$conf" 2>/dev/null; then
-    sed -i 's/^PORT=22$/PORT=222/' "$conf"
-    info "PORT: 22 → 222"
-  fi
-  if grep -q 'PIDFILE="/opt/var/run/dropbear.pid"' "$init" 2>/dev/null; then
-    sed -i 's|PIDFILE="/opt/var/run/dropbear.pid"|PIDFILE="/var/run/dropbear.pid"|g' "$init"
-    info "PIDFILE → /var/run/dropbear.pid"
-  fi
-  if [ "$reset" = "1" ] && [ -f /opt/etc/passwd ]; then
-    # стандартный hash keenetic (как в sw.ext.io dropbear_fix)
-    sed -i 's#^\(root:\)[^:]*#\1$1$6vKOV7zs$d2EqNYGvlBWEYoFD7FFkr0#' /opt/etc/passwd
-    info "Пароль root Entware сброшен на: keenetic"
-  fi
-
-  port=$(grep -E '^PORT=' "$conf" 2>/dev/null | head -1 | cut -d= -f2)
-  [ -z "$port" ] && port="?"
-  bin="/opt/sbin/dropbear"
-  [ -x "$bin" ] || bin="dropbear"
-
-  echo
-  warn "Сейчас будет перезапуск Entware dropbear — SSH-сессия оборвётся."
-  warn "Подключайтесь через 5–10 сек:"
-  warn "  ssh -p $port root@<IP-роутера>"
-  [ "$reset" = "1" ] && warn "  пароль: keenetic"
-  echo
-  info "Планирую restart в фоне (лог: $log)..."
-
-  # Полная отвязка от SSH-сессии (SIGHUP не должен убить restart)
-  rm -f "$log"
-  if command -v nohup >/dev/null 2>&1; then
-    nohup sh -c "
-      trap '' HUP
-      sleep 2
-      echo \"[\$(date)] stop\" >>'$log'
-      '$init' stop >>'$log' 2>&1 || true
-      killall -9 dropbear >>'$log' 2>&1 || true
-      killall -9 /opt/sbin/dropbear >>'$log' 2>&1 || true
-      rm -f /opt/var/run/dropbear.pid /var/run/dropbear.pid
-      sleep 1
-      echo \"[\$(date)] start\" >>'$log'
-      '$init' start >>'$log' 2>&1 || '$bin' -p '$port' >>'$log' 2>&1 || true
-      sleep 1
-      echo \"[\$(date)] status\" >>'$log'
-      '$init' status >>'$log' 2>&1 || true
-      busybox ps 2>/dev/null | grep dropbear | grep -v grep >>'$log' || ps w 2>/dev/null | grep dropbear | grep -v grep >>'$log' || true
-      echo \"[\$(date)] done port=$port\" >>'$log'
-    " </dev/null >>"$log" 2>&1 &
-  else
-    (
-      trap '' HUP
-      sleep 2
-      "$init" stop 2>/dev/null || true
-      killall -9 dropbear 2>/dev/null || true
-      rm -f /opt/var/run/dropbear.pid /var/run/dropbear.pid
-      sleep 1
-      "$init" start 2>/dev/null || "$bin" -p "$port" 2>/dev/null || true
-    ) </dev/null >>"$log" 2>&1 &
-  fi
-
-  info "PID $!. Ждите обрыва сессии, затем: ssh -p $port root@IP"
-  # Держим процесс меню пару секунд, чтобы nohup успел отцепиться
-  sleep 3
-  return 0
-}
-
 menu_service() {
   while true; do
     echo
     printf '%s\n' "${BOLD}${CYAN}[::]  ${LBL_REMOVE} (S)${NC}"
     echo "      1. $LBL_S1"
-    echo "      2. $LBL_S2"
     echo "      U. $LBL_U"
     echo "      0. ${LBL_BACK_ITEM}"
     echo
@@ -6575,7 +5632,6 @@ menu_service() {
     read -r schoice
     case "$schoice" in
       1) service_upx_compress || true ;;
-      2) service_dropbear_fix || true ;;
       U|u) opkg_upgrade_all || true ;;
       0|"") return 0 ;;
       *) warn "Неверный выбор." ;;
@@ -6875,17 +5931,9 @@ read_choice() {
 # ---------------------------------------------------------------------------
 # Главное меню
 # ---------------------------------------------------------------------------
-require_keenetic() {
-  if [ "$ROUTER_OS" != "keenetic" ] && [ "$ROUTER_OS" != "padavan" ]; then
-    warn "Пункт доступен только на Keenetic/Netcraze OS (использует ndmc)."
-    return 1
-  fi
-  return 0
-}
-
 require_entware() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    warn "Установщик рассчитан на Entware (Keenetic/Netcraze) — нативной OpenWrt-сборки у этого инструмента нет."
+  if [ "$ROUTER_OS" = "openwrt" ] || [ "$ROUTER_OS" = "generic" ]; then
+    warn "Утилита рассчитана на Entware — нативной OpenWrt-сборки у этого инструмента нет."
     return 1
   fi
   return 0
@@ -6893,8 +5941,8 @@ require_entware() {
 
 main_menu() {
   upd_start
-  local os_tag="Entware"
-  [ "$ROUTER_OS" = "openwrt" ] && os_tag="OpenWrt"
+  local os_tag="OpenWrt"
+  [ "$ROUTER_OS" = "generic" ] && os_tag="Linux"
   while true; do
     clear 2>/dev/null || true
     echo
@@ -6919,7 +5967,6 @@ main_menu() {
     printf '%s\n' "${CYAN}${BOLD}[::]  ${LBL_UTILS}${NC}"
     echo "      10. dpi-detector"
     echo "      11. awg-manager"
-    echo "      12. KeenKit"
     echo "      13. usque-keenetic"
     echo "      14. MagiTrickle"
     echo "      15. telemt / telemt-panel"
@@ -6951,7 +5998,6 @@ main_menu() {
       8)  menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
       11) menu_awg_manager || true ;;
-      12) require_keenetic && menu_keenkit || true ;;
       13) menu_usque_keenetic || true ;;
       14) menu_magitrickle || true ;;
       15) menu_telemt || true ;;
@@ -7028,11 +6074,7 @@ ensure_menu_symlink() {
 ensure_menu_symlink
 
 if ! command -v opkg >/dev/null 2>&1 && ! command -v apk >/dev/null 2>&1; then
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    error "Пакетный менеджер (opkg/apk) не найден в OpenWrt."
-  else
-    error "opkg не найден. Скрипт предназначен для Entware (Keenetic/Netcraze) или OpenWrt."
-  fi
+  error "Пакетный менеджер (opkg/apk) не найден."
   exit 1
 fi
 
