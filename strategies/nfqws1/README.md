@@ -5,44 +5,28 @@
 NFQWS_ARGS_UDP, MODE_LIST/ALL/AUTO, NFQWS_EXTRA_ARGS и NFQWS_ARGS_CUSTOM.
 NFQWS2 в общем архиве сохранён побайтно, включая конфиги и README.
 
-## Keenetic / Netcraze
+## Установка на OpenWrt
 
-Для уже установленного пакета nfqws-keenetic первого поколения:
+Для пакета nfqws-keenetic первого поколения:
 
-1. Скопируйте содержимое blobs/ в /opt/etc/nfqws/.
-2. Скопируйте содержимое lists/ в /opt/etc/nfqws/. Сохраните свои списки,
-   если такие файлы уже есть на роутере.
-3. Сохраните текущий /opt/etc/nfqws/nfqws.conf. Выберите один .conf из этого
-   комплекта и скопируйте его как /opt/etc/nfqws/nfqws.conf.
-4. Укажите ISP_INTERFACE и перенесите свои настройки политики, IPv6 и очереди
-   из старого конфига. Значения по умолчанию сохранены из предоставленного порта:
-   eth3, IPV6_ENABLED=0, NFQUEUE_NUM=200.
-5. Проверьте конфиг командами ниже, затем перезапустите:
-   /opt/etc/init.d/S51nfqws restart
+1. Скопируйте содержимое `blobs/` в `/etc/nfqws/`.
+2. Скопируйте содержимое `lists/` в `/etc/nfqws/`.
+3. Сохраните текущий `/etc/nfqws/nfqws.conf`. Выберите один `.conf` из этого
+   комплекта и скопируйте его как `/etc/nfqws/nfqws.conf`.
+4. Укажите `ISP_INTERFACE` и настройки IPv6 (`IPV6_ENABLED=0|1`).
+5. Перезапустите сервис:
+   `/etc/init.d/nfqws-keenetic restart`
 
 Проверка на роутере без запуска перехвата:
 
 ```sh
 (
-  . /opt/etc/nfqws/nfqws.conf
+  . /etc/nfqws/nfqws.conf
   set -f
   nfqws --dry-run $NFQWS_ARGS_CUSTOM --new $NFQWS_ARGS_UDP --new \
     $NFQWS_ARGS_QUIC $NFQWS_EXTRA_ARGS --new $NFQWS_ARGS $NFQWS_EXTRA_ARGS
 )
 ```
-
-При unknown option нужна сборка первого поколения, поддерживающая параметры
-выбранной стратегии. Движок и служба не включены в этот комплект.
-
-## OpenWrt
-
-Отдельный архив openwrt содержит те же 21 конфигурацию для пакета nfqws-keenetic
-на OpenWrt: пути /etc/nfqws и /var/log вместо /opt/etc/nfqws и /opt/var/log.
-Разместите blobs/ и lists/ в /etc/nfqws, выбранный конфиг — в
-/etc/nfqws/nfqws.conf. Выставьте свой WAN-интерфейс. В проверке выше замените
-/opt/etc/nfqws/nfqws.conf на /etc/nfqws/nfqws.conf, затем используйте
-/etc/init.d/nfqws-keenetic restart.
-Это формат пакета nfqws-keenetic; обычный bol-van/zapret использует другой конфиг.
 
 ## Особенности сохранения стратегий
 

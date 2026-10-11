@@ -3,7 +3,7 @@
 # Settings
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONF_FILE="${SCRIPT_DIR}/as.conf"
-LISTS_DIR="/opt/etc/nfqws2/lists"
+LISTS_DIR="/etc/nfqws2/lists"
 #DOWNLOAD_URL="https://sw.ext.io/asw/%s?v4"
 DOWNLOAD_URL="https://asn.web2core.workers.dev/%s?v4"
 DOWNLOAD_URL_Z2K="https://raw.githubusercontent.com/necronicle/z2k/refs/heads/z2k-enhanced/files/lists/tcp16_nets.txt"

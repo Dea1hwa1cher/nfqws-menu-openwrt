@@ -902,17 +902,13 @@ backup_file() {
   cp -a "$f" "$dest" && info "Бэкап: $dest"
 }
 
-# Стратегии в репозитории написаны под Entware (/opt/etc/nfqws*) — на OpenWrt
-# пакет живёт в /etc/nfqws*, подменяем префикс путей blob/list-файлов.
+# Стратегии: подменяем возможные оставшиеся /opt пути под OpenWrt
 strategy_retarget_paths() {
   local f="$1"
   [ -f "$f" ] || return 0
-  [ "$CONF_BASE_DIR" != "/opt/etc" ] || return 0
-  sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$f" 2>/dev/null || true
+  sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g; s|/opt/var/log/|/var/log/|g" "$f" 2>/dev/null || true
 }
 
-# ---------------------------------------------------------------------------
-# Архитектура / модель (кэш)
 # ---------------------------------------------------------------------------
 # Архитектура / модель (кэш)
 # ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 | Hosts (п. 7) | Блок с маркерами `# >>> nfqws-menu hosts >>>` в `/etc/hosts` + reload dnsmasq |
 | DoH (п. 8) | Пакет `https-dns-proxy` (uci) + dnsmasq per-domain (DoH) |
 
-Стратегии при применении автоматически переписывают пути blob/list-файлов под префикс пакета (`/opt/etc/nfqws*` → `/etc/nfqws*`).
+Стратегии в репозитории сконфигурированы под нативные пути OpenWrt (`/etc/nfqws*`, `/var/log*`).
 
 Сторонние утилиты на OpenWrt:
 

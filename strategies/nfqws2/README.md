@@ -42,12 +42,12 @@
 
 ## Как ставить
 
-1. Скопировать `bin\*.bin` из бандла в `/opt/etc/nfqws2/blobs/`.
-2. `lists\list-google.txt` → `/opt/etc/nfqws2/lists/google.list`,
+1. Скопировать `bin\*.bin` из бандла в `/etc/nfqws2/blobs/`.
+2. `lists\list-google.txt` → `/etc/nfqws2/lists/google.list`,
    `list-general*.txt` → `user.list`, `list-exclude*.txt` → `exclude.list`,
    `ipset-all.txt` → `ipset.list`, `ipset-exclude*.txt` → `ipset_exclude.list`.
-3. Выбранный `.conf` → `/opt/etc/nfqws2/nfqws2.conf`, поправить `ISP_INTERFACE`.
-4. `/opt/etc/init.d/S51nfqws2 restart`
+3. Выбранный `.conf` → `/etc/nfqws2/nfqws2.conf`, поправить `ISP_INTERFACE`.
+4. `/etc/init.d/nfqws2-keenetic restart`
 
 ## Таблица соответствий winws1 → nfqws2
 
