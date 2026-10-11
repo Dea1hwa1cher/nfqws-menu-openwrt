@@ -98,6 +98,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 | Утилита | OpenWrt |
 | --- | --- |
 | 10. dpi-detector | ставится нативно (бинарь в `/usr/bin`) |
+| 11. awg-openwrt | AmneziaWG 3.1 (ядро `kmod-amneziawg`, утилиты `amneziawg-tools`, LuCI `luci-proto-amneziawg`) |
 | 14. MagiTrickle | нативный пакет (opkg/apk-фид, сервис `/etc/init.d/magitrickle`) |
 | 15. luci-app-telemt | нативный пакет MTProxy + веб-интерфейс LuCI (`luci-app-telemt` + `telemt`) |
 | 16. tg-ws-proxy-rs | нативная ветка установщика (LuCI, `/usr/bin`, `/etc/init.d/tg-ws-proxy-rs`) |
@@ -113,7 +114,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 1. Определяет ОС (`/etc/openwrt_release` → `/etc/os-release` → `uci`) и архитектуру: **`opkg print-architecture`** / **`apk --print-arch`** → при ошибке **opkg.conf** → fallback `uname -m`.
 2. Заголовок: **Модель / Title / ARCH** — из `/tmp/sysinfo/model` и `/etc/openwrt_release`. ARCH зелёный (из opkg/openwrt_release) или жёлтый (из conf/uname). Предупреждение, если нет модулей NFQUEUE: `kmod-nft-queue` (fw4) / `kmod-ipt-nfqueue` (fw3).
 3. Показывает **только установленные** компоненты (версии и статус) одним проходом awk по status/process-кэшу:
-   - пакеты NFQWS / web, **tg-ws-proxy-rs**, magitrickle, **luci-app-telemt** / telemt;
+   - пакеты NFQWS / web, **awg-openwrt**, **tg-ws-proxy-rs**, magitrickle, **luci-app-telemt** / telemt;
    - dpi-detector, cron, dropbear;
    - **⚡** — сервис запущен; **⭡** — доступна более новая версия (фоновая проверка, **TTL 10 мин**, перерисовка меню без Enter).
 4. Интерфейс **RU / EN** (пункт **77**): подписи меню и общие промпты (`Your choice [0]:` / `Ваш выбор [0]:`). Подпись `Language: RU|EN` всегда латиницей.
@@ -134,6 +135,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 
 [::]  УТИЛИТЫ
       10. dpi-detector
+      11. awg-openwrt (AmneziaWG)
       14. MagiTrickle
       15. luci-app-telemt (MTProxy)
       16. TG WS Proxy Rust
@@ -291,6 +293,19 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 
 Если бинарник уже есть — сразу запускает его.
 
+### 11. awg-openwrt (AmneziaWG)
+
+Интеграция [2Grey/awg-openwrt](https://github.com/2Grey/awg-openwrt) — поддержка протокола AmneziaWG (AWG 3.1) для OpenWrt:
+
+- **Автоматическая установка** через официальный feed-скрипт с поддержкой `opkg` (OpenWrt ≤24.10) и `apk` (OpenWrt 25.x+):
+  - Модуль ядра `kmod-amneziawg`
+  - Утилиты управления `amneziawg-tools` (`awg`)
+  - Протокол LuCI `luci-proto-amneziawg` (поддержка интервалов keepalive и параметров обфускации)
+  - Опциональный русский перевод интерфейса LuCI (`luci-i18n-amneziawg-ru`)
+- **Диагностика системы** через официальный скрипт `amneziawg-check.sh` (проверка релизов, архитектуры, фидов, парсера LuCI и версии модуля).
+- **Просмотр состояния** интерфейсов и пиров (`awg show`).
+- **Корректное удаление** пакетов и сторонних репозиториев/ключей из системы.
+
 ### 14. MagiTrickle
 
 Утилита для точечной маршрутизации сетевого трафика по заданным доменным именам.
@@ -331,7 +346,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 
 ```
 Удаление:
-  [N] nfqws2-keenetic / nfqws-keenetic-web / dpi-detector /
+  [N] nfqws2-keenetic / nfqws-keenetic-web / awg-openwrt / dpi-detector /
       tg-ws-proxy-rs / magitrickle
   [a] Удалить все пакеты NFQWS
   [b] Удалить резервные копии (.bak.* / *-opkg)
@@ -339,7 +354,8 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 ```
 
 - Пакеты NFQWS — `opkg remove` / `apk del`
-- **dpi-detector** — `/usr/local/bin/dpi-detector`
+- **awg-openwrt** — удаление пакетов AmneziaWG + очистка фидов и ключей
+- **dpi-detector** — `/usr/bin/dpi-detector`
 - **tg-ws-proxy-rs** — бинарь, init, конфиги
 - **magitrickle** — удаление пакета + запрос на удаление файла репозитория
 - **a)** — все пакеты NFQWS + dpi-detector

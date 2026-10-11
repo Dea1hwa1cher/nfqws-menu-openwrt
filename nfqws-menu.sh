@@ -757,6 +757,7 @@ _run_remote_sh_restore_traps() {
 
 run_remote_sh() {
   local url="$1" min_bytes="${2:-8000}" tmp rc=0
+  shift 2 2>/dev/null || shift $#
   rm -f /tmp/nfqws-remote-*.sh 2>/dev/null || true
   tmp="/tmp/nfqws-remote-$$.sh"
   trap 'rm -f /tmp/nfqws-remote-$$.sh 2>/dev/null; _run_remote_sh_restore_traps' EXIT INT TERM
@@ -770,9 +771,9 @@ run_remote_sh() {
 
   # Полный tty — иначе интерактив (awg-menu и т.п.) не поднимается
   if [ -c /dev/tty ]; then
-    sh "$tmp" < /dev/tty > /dev/tty 2>&1 || rc=$?
+    sh "$tmp" "$@" < /dev/tty > /dev/tty 2>&1 || rc=$?
   else
-    sh "$tmp" || rc=$?
+    sh "$tmp" "$@" || rc=$?
   fi
   rm -f "$tmp"
   _run_remote_sh_restore_traps
@@ -781,7 +782,7 @@ run_remote_sh() {
 }
 
 # Единый формат пункта меню → удалённый установщик:
-#   [+] Открываем: 11. awg-manager
+#   [+] Открываем: 11. awg-openwrt
 #   [+] Источник: https://...
 #   ================================================
 # $1=номер  $2=название  $3=url  [$4=min_bytes]
@@ -1244,7 +1245,7 @@ EOF
 # kind → «запущен?» (по процессу / порту)
 service_is_up() {
   case "$1" in
-    nfqws|nfqws2|magitrickle|awg-manager|telemt) proc_running "$1" ;;
+    nfqws|nfqws2|magitrickle|telemt) proc_running "$1" ;;
     # tg-ws-proxy-rs содержит "tg-ws-proxy" подстрокой, поэтому у Go-сборки
     # совпадение по целому имени команды, а у Rust — по своей строке.
     tg-ws-proxy)    proc_running_exact "tg-ws-proxy" ;;
@@ -1252,13 +1253,14 @@ service_is_up() {
     web)
       port_is_open 90 || proc_running lighttpd
       ;;
-    # awg-manager: сам демон, либо sing-box из его каталога, либо amneziawg
-    awg)
-      proc_running "awg-manager" && return 0
-      proc_running "amneziawg" && return 0
-      # sing-box часто общий; учитываем только если он из комплекта awg-manager
-      if [ -x /opt/etc/awg-manager/singbox/sing-box ] || [ -f /opt/etc/awg-manager/singbox/sing-box ]; then
-        proc_running "sing-box" && return 0
+    # awg / amneziawg: модуль ядра загружен или поднят интерфейс awg*
+    awg|amneziawg)
+      [ -d /sys/module/amneziawg ] && return 0
+      if command -v awg >/dev/null 2>&1; then
+        awg show interfaces 2>/dev/null | grep -q . && return 0
+      fi
+      if command -v ip >/dev/null 2>&1; then
+        ip link show awg0 >/dev/null 2>&1 && return 0
       fi
       return 1
       ;;
@@ -1268,10 +1270,10 @@ service_is_up() {
 
 # Один awk: OPKG + PROC + UPD → готовые строки статуса (минимум fork на MIPS)
 # Метки ⭡: ключи UPD_CACHE = nfqws-keenetic|nfqws2-keenetic|nfqws-keenetic-web|
-#   tg-ws-proxy-rs|dpi-detector|awg-manager (см. upd_check_bg).
+#   tg-ws-proxy-rs|dpi-detector (см. upd_check_bg).
 show_installed() {
-  local out web_up=0 has_sb=0
-  local extras="" rs_ver dpi_ver kk_ver
+  local out web_up=0 awg_up=0
+  local extras="" rs_ver dpi_ver kk_ver _awg_ver _tm_ver
   PORT90_CACHE=""
   refresh_opkg_cache
   refresh_proc_cache
@@ -1279,9 +1281,9 @@ show_installed() {
   echo
   printf '%s\n' "${BOLD}${LBL_INSTALLED}${NC}"
 
-  # port 90 / sing-box — один раз
+  # port 90 / awg — один раз
   port_is_open 90 && web_up=1
-  { [ -x /opt/etc/awg-manager/singbox/sing-box ] || [ -f /opt/etc/awg-manager/singbox/sing-box ]; } && has_sb=1
+  service_is_up awg && awg_up=1
 
   # Внешние tool-версии (не из opkg) — до awk
   if [ -x "${TG_WS_PROXY_RS_BIN:-/opt/bin/tg-ws-proxy-rs}" ]; then
@@ -1302,9 +1304,12 @@ show_installed() {
     extras="${extras}tool|telemt|${_tm_ver:-ok}|telemt
 "
   fi
-  # awg без opkg-пакета, но с каталогом
-  if [ -d /opt/etc/awg-manager ]; then
-    extras="${extras}awgdir
+  if [ -d /sys/module/amneziawg ] || command -v awg >/dev/null 2>&1; then
+    _awg_ver=""
+    if [ -r /sys/module/amneziawg/version ]; then
+      _awg_ver=$(cat /sys/module/amneziawg/version 2>/dev/null | tr -d '\r\n')
+    fi
+    extras="${extras}tool|amneziawg|${_awg_ver:-ok}|amneziawg
 "
   fi
   # список S* init (имена сервисов); на OpenWrt сервисы в /etc/init.d без S-префикса
@@ -1335,7 +1340,7 @@ show_installed() {
   fi
 
   out=$(
-    WEB_UP="$web_up" HAS_SB="$has_sb" \
+    WEB_UP="$web_up" AWG_UP="$awg_up" \
     G="$GREEN" N="$NC" R="${RUN_MARK}" U="${UPD_MARK}" D="$DIM" \
     awk -v none="$LBL_NONE" '
     function ver_gt(a, b,   i, na, nb, xa, xb, ca, cb) {
@@ -1376,7 +1381,7 @@ show_installed() {
       G = ENVIRON["G"]; N = ENVIRON["N"]; R = ENVIRON["R"]
       U = ENVIRON["U"]; D = ENVIRON["D"]
       WEB_UP = ENVIRON["WEB_UP"] + 0
-      HAS_SB = ENVIRON["HAS_SB"] + 0
+      AWG_UP = ENVIRON["AWG_UP"] + 0
     }
     /^---PROC---$/ { section = "proc"; next }
     /^---UPD---$/  { section = "upd";  next }
@@ -1399,7 +1404,6 @@ show_installed() {
       next
     }
     section == "extra" {
-      if ($0 == "awgdir") { awgdir = 1; next }
       if ($0 ~ /^tool\|/) {
         n = split($0, t, "|")
         # tool|name|ver|kind
@@ -1442,13 +1446,12 @@ show_installed() {
         m = mark_upd("dpi-detector", tools["dpi-detector"])
         row("dpi-detector", tools["dpi-detector"], m)
       }
-      # awg-manager
-      if (("awg-manager" in opkg) || awgdir) {
-        aver = ("awg-manager" in opkg) ? opkg["awg-manager"] : "ok"
-        if (HAS_SB) aver = aver " [+SB]"
-        up = proc_has("awg-manager") || proc_has("amneziawg") || (HAS_SB && proc_has("sing-box"))
-        m = mark_run(up) mark_upd("awg-manager", ("awg-manager" in opkg) ? opkg["awg-manager"] : "")
-        row("awg-manager", aver, m)
+      # awg-openwrt (AmneziaWG)
+      if (("kmod-amneziawg" in opkg) || ("amneziawg-tools" in opkg) || ("luci-proto-amneziawg" in opkg) || ("amneziawg" in tools)) {
+        aver = ("kmod-amneziawg" in opkg) ? opkg["kmod-amneziawg"] : (("amneziawg-tools" in opkg) ? opkg["amneziawg-tools"] : (("amneziawg" in tools) ? tools["amneziawg"] : "ok"))
+        up = AWG_UP || proc_has("amneziawg")
+        m = mark_run(up)
+        row("awg-openwrt", aver, m)
       }
       if ("luci-app-telemt" in opkg) {
         m = mark_run(proc_has("telemt")) mark_upd("luci-app-telemt", opkg["luci-app-telemt"])
@@ -1466,7 +1469,9 @@ show_installed() {
       skip["nfqws"]=1; skip["nfqws2"]=1; skip["lighttpd"]=1
       skip["tg-ws-proxy"]=1; skip["tg-ws-proxy-rs"]=1; skip["magitrickle"]=1
       skip["telemt"]=1; skip["luci-app-telemt"]=1
-      if (("awg-manager" in opkg) || awgdir) skip["awg-manager"]=1
+      skip["kmod-amneziawg"]=1; skip["amneziawg-tools"]=1
+      skip["luci-proto-amneziawg"]=1; skip["luci-app-amneziawg"]=1; skip["luci-i18n-amneziawg-ru"]=1
+      skip["amneziawg"]=1; skip["awg-manager"]=1
       for (svc in inits) {
         if (svc in skip) continue
         ver = (svc in opkg) ? opkg[svc] : ""
@@ -4095,7 +4100,8 @@ update_self() {
 # 10–14. Утилиты
 # ---------------------------------------------------------------------------
 DPI_DETECTOR_INSTALL_URL="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh"
-AWG_MANAGER_INSTALL_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh"
+AWG_OPENWRT_INSTALL_URL="https://raw.githubusercontent.com/2Grey/awg-openwrt/master/amneziawg-feed-install.sh"
+AWG_OPENWRT_CHECK_URL="https://raw.githubusercontent.com/2Grey/awg-openwrt/master/amneziawg-check.sh"
 
 # dpi-detector: приоритет /usr/bin (OpenWrt), fallback /usr/local/bin или /tmp
 dpi_detector_bin() {
@@ -4176,9 +4182,112 @@ menu_dpi_detector() {
   fi
 }
 
+install_awg_openwrt() {
+  local extra_arg="$1"
+  echo
+  info "Установка AmneziaWG (2Grey/awg-openwrt)..."
+  if [ -n "$extra_arg" ]; then
+    run_remote_sh "$AWG_OPENWRT_INSTALL_URL" 4000 "$extra_arg"
+  else
+    run_remote_sh "$AWG_OPENWRT_INSTALL_URL" 4000
+  fi
+  refresh_opkg_cache
+  echo
+  pause_press_enter
+}
+
+check_awg_openwrt() {
+  echo
+  info "Диагностика AmneziaWG (amneziawg-check.sh)..."
+  run_remote_sh "$AWG_OPENWRT_CHECK_URL" 2000
+  echo
+  pause_press_enter
+}
+
+menu_awg_openwrt() {
+  local choice kmod_st tools_st proto_st ru_st mod_ver
+  while :; do
+    echo
+    printf '%s\n' "${CYAN}${BOLD}              awg-openwrt (AmneziaWG для OpenWrt)${NC}"
+    printf '%s\n' "${DIM}     https://github.com/2Grey/awg-openwrt${NC}"
+    echo
+
+    if is_installed "kmod-amneziawg"; then
+      kmod_st="${GREEN}установлен${NC} ($(pkg_version "kmod-amneziawg" 2>/dev/null || echo "ok"))"
+    else
+      kmod_st="${YELLOW}не установлен${NC}"
+    fi
+
+    if is_installed "amneziawg-tools"; then
+      tools_st="${GREEN}установлен${NC} ($(pkg_version "amneziawg-tools" 2>/dev/null || echo "ok"))"
+    else
+      tools_st="${YELLOW}не установлен${NC}"
+    fi
+
+    if is_installed "luci-proto-amneziawg"; then
+      proto_st="${GREEN}установлен${NC} ($(pkg_version "luci-proto-amneziawg" 2>/dev/null || echo "ok"))"
+    else
+      proto_st="${YELLOW}не установлен${NC}"
+    fi
+
+    if is_installed "luci-i18n-amneziawg-ru"; then
+      ru_st="${GREEN}установлен${NC}"
+    else
+      ru_st="${DIM}не установлен${NC}"
+    fi
+
+    if [ -d /sys/module/amneziawg ]; then
+      mod_ver="загружен"
+      [ -r /sys/module/amneziawg/version ] && mod_ver="загружен ($(cat /sys/module/amneziawg/version 2>/dev/null))"
+      mod_ver="${GREEN}${mod_ver} (⚡)${NC}"
+    else
+      mod_ver="${DIM}не загружен${NC}"
+    fi
+
+    printf '  Ядро (kmod-amneziawg):        %b\n' "$kmod_st"
+    printf '  Утилиты (amneziawg-tools):    %b\n' "$tools_st"
+    printf '  Протокол LuCI:                %b\n' "$proto_st"
+    printf '  Русский перевод LuCI:         %b\n' "$ru_st"
+    printf '  Модуль в ядре:                %b\n' "$mod_ver"
+    echo
+    echo "  [1] Установить / обновить AmneziaWG (с русским переводом LuCI)"
+    echo "  [2] Установить / обновить AmneziaWG (без перевода)"
+    echo "  [3] Диагностика системы (amneziawg-check.sh)"
+    echo "  [4] Статус интерфейсов (awg show)"
+    echo "  [8] Удалить AmneziaWG (пакеты и репозиторий)"
+    echo "  [0] Назад"
+    echo
+    ask "Ваш выбор [0]: "
+    read -r choice
+    case "$choice" in
+      1) install_awg_openwrt "-r" ;;
+      2) install_awg_openwrt ;;
+      3) check_awg_openwrt ;;
+      4)
+        echo
+        if command -v awg >/dev/null 2>&1; then
+          info "Вывод 'awg show':"
+          awg show || true
+        else
+          warn "Утилита 'awg' не найдена (пакет amneziawg-tools не установлен)."
+        fi
+        echo
+        pause_press_enter
+        ;;
+      8)
+        if confirm_no "Удалить AmneziaWG (пакеты kmod-amneziawg, amneziawg-tools, luci-proto-amneziawg и фид)?"; then
+          remove_awg_openwrt
+          pause_press_enter
+        fi
+        ;;
+      0|"") return 0 ;;
+      *) warn "Неверный выбор" ;;
+    esac
+  done
+}
+
 menu_awg_manager() {
-  require_entware || return 1
-  run_menu_remote_sh "11" "awg-manager" "$AWG_MANAGER_INSTALL_URL" || return 1
+  menu_awg_openwrt "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -5284,16 +5393,33 @@ remove_dpi_detector() {
   fi
 }
 
+is_awg_openwrt_installed() {
+  is_installed "amneziawg-tools" || is_installed "kmod-amneziawg" || is_installed "luci-proto-amneziawg" || [ -d /sys/module/amneziawg ] || command -v awg >/dev/null 2>&1
+}
+
 is_awg_manager_installed() {
-  is_installed "awg-manager" || [ -d /opt/etc/awg-manager ]
+  is_awg_openwrt_installed || [ -d /opt/etc/awg-manager ]
+}
+
+remove_awg_openwrt() {
+  pkg_remove luci-i18n-amneziawg-ru luci-proto-amneziawg luci-app-amneziawg amneziawg-tools kmod-amneziawg 2>/dev/null || true
+  if [ -f /etc/opkg/customfeeds.conf ]; then
+    sed -i '\|^[[:space:]]*src/gz[[:space:]][[:space:]]*awg[[:space:]]|d' /etc/opkg/customfeeds.conf 2>/dev/null || true
+    sed -i '\|2grey\.github\.io/awg-openwrt|d' /etc/opkg/customfeeds.conf 2>/dev/null || true
+    sed -i '\|slava-shchipunov\.github\.io/awg-openwrt|d' /etc/opkg/customfeeds.conf 2>/dev/null || true
+  fi
+  if [ -f /etc/apk/repositories.d/customfeeds.list ]; then
+    sed -i '\|2grey\.github\.io/awg-openwrt|d' /etc/apk/repositories.d/customfeeds.list 2>/dev/null || true
+    sed -i '\|slava-shchipunov\.github\.io/awg-openwrt|d' /etc/apk/repositories.d/customfeeds.list 2>/dev/null || true
+  fi
+  rm -f /etc/apk/keys/awg-openwrt-feed.pem /tmp/awg-openwrt-feed.* 2>/dev/null || true
+  [ -d /opt/etc/awg-manager ] && rm -rf /opt/etc/awg-manager && info "  удалён каталог: /opt/etc/awg-manager"
+  refresh_opkg_cache
+  info "AmneziaWG удалён."
 }
 
 remove_awg_manager() {
-  if is_installed "awg-manager"; then
-    pkg_remove awg-manager 2>/dev/null || true
-  fi
-  [ -d /opt/etc/awg-manager ] && rm -rf /opt/etc/awg-manager && info "  удалён каталог: /opt/etc/awg-manager"
-  info "awg-manager удалён."
+  remove_awg_openwrt
 }
 
 
@@ -5755,7 +5881,7 @@ menu_remove() {
   is_installed "nfqws2-keenetic"    && items="$items nfqws2-keenetic"
   is_installed "nfqws-keenetic-web" && items="$items nfqws-keenetic-web"
   is_dpi_detector_installed         && items="$items dpi-detector"
-  is_awg_manager_installed          && items="$items awg-manager"
+  is_awg_openwrt_installed          && items="$items awg-openwrt"
   is_tg_ws_proxy_rs_installed       && items="$items tg-ws-proxy-rs"
   is_installed "magitrickle"        && items="$items magitrickle"
   is_installed "opera-proxy"        && items="$items opera-proxy"
@@ -5800,7 +5926,7 @@ menu_remove() {
       confirm_no "Удалить $target?" || return
       case "$target" in
         dpi-detector)  remove_dpi_detector ;;
-        awg-manager)   remove_awg_manager ;;
+        awg-openwrt|awg-manager) remove_awg_openwrt ;;
         tg-ws-proxy-rs) remove_tg_ws_proxy_rs ;;
         magitrickle)   remove_magitrickle ;;
         opera-proxy)   remove_opera_proxy ;;
@@ -6029,10 +6155,6 @@ upd_check_bg() {
     ver=$(upd_release_tag_any "Runnin4ik/dpi-detector" 2>/dev/null) || ver=""
     [ -n "$ver" ] && printf 'dpi-detector %s\n' "$ver" >> "$tmp"
   fi
-  if is_awg_manager_installed; then
-    ver=$(upd_release_tag "hoaxisr/awg-manager" 2>/dev/null) || ver=""
-    [ -n "$ver" ] && printf 'awg-manager %s\n' "$ver" >> "$tmp"
-  fi
   # Время проверки пишется всегда: иначе неудачный прогон повторялся бы на
   # каждом входе в меню.
   printf 'checked %s\n' "$(date +%s)" >> "$tmp"
@@ -6095,7 +6217,11 @@ upd_local() {
     menu)           printf '%s' "$SCRIPT_VERSION" ;;
     tg-ws-proxy-rs) tg_ws_proxy_rs_version 2>/dev/null ;;
     dpi-detector)   dpi_detector_version 2>/dev/null ;;
-    awg-manager)    pkg_version "awg-manager" 2>/dev/null ;;
+    awg-openwrt|awg-manager)
+      _v=$(pkg_version "kmod-amneziawg" 2>/dev/null)
+      [ -z "$_v" ] && _v=$(pkg_version "amneziawg-tools" 2>/dev/null)
+      printf '%s' "$_v"
+      ;;
     *)              pkg_version "$1" 2>/dev/null ;;
   esac
   return 0
@@ -6234,7 +6360,7 @@ main_menu() {
     echo
     printf '%s\n' "${CYAN}${BOLD}[::]  ${LBL_UTILS}${NC}"
     echo "      10. dpi-detector"
-    echo "      11. awg-manager"
+    echo "      11. awg-openwrt (AmneziaWG)"
     echo "      14. MagiTrickle"
     echo "      15. luci-app-telemt (MTProxy)"
     echo "      16. TG WS Proxy Rust"
@@ -6264,7 +6390,7 @@ main_menu() {
       7)  menu_update_hosts || true ;;
       8)  menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
-      11) menu_awg_manager || true ;;
+      11) menu_awg_openwrt || true ;;
       14) menu_magitrickle || true ;;
       15) menu_telemt || true ;;
       16) menu_tg_ws_proxy_rs || true ;;
