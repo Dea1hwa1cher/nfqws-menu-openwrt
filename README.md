@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.1**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.2**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -350,6 +350,13 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 ---
 
 ## Changelog
+
+### 0.1.2
+
+- **Стратегии**: все пути в `strategies/nfqws1/*.conf`, `strategies/nfqws2/*.conf`, `strategies/dns_filter_nfqws1` и служебных скриптах переведены на нативные пути OpenWrt (`/etc/nfqws*`, `/var/log/*`)
+- **README.md**: добавлены быстрые зеркала установки (jsDelivr, Fastly, ghproxy, GitHub raw), полностью удалены Keenetic/Entware-разделы
+- **Очистка кода**: удалены `dropbear_fix`, `menu-dns.sh`, вызовы `ndmc`, проверки RCI, KeenKit и зависимости от Entware
+- **Целостность**: обновлён `.gitattributes` (`eol=lf` для `.list` и `dns_filter_*`), пересчитан `SHA256SUMS`
 
 ### 0.1.1
 
