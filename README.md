@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.2**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.3**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -368,6 +368,13 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 ---
 
 ## Changelog
+
+### 0.1.3
+
+- **AmneziaWG (пункт 11)**: замена устаревшего `awg-manager` на нативный проект для OpenWrt [2Grey/awg-openwrt](https://github.com/2Grey/awg-openwrt) (AWG 3.1) с автоматической установкой feed, проверкой совместимости LuCI, диагностикой `amneziawg-check.sh` и поддержкой русского языка (`-r`)
+- **Очистка от Entware**: удалены привязки к `sing-box`, `/opt/etc/awg-manager` и legacy-путям
+- **Удаление пакетов (пункт 88)**: поддержка корректного удаления компонентов AmneziaWG и очистки настроенных фидов opkg/apk
+- **Целостность**: синхронизация контрольных сумм в `SHA256SUMS`
 
 ### 0.1.2
 
