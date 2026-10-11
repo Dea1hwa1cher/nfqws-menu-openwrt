@@ -1244,7 +1244,7 @@ EOF
 # kind → «запущен?» (по процессу / порту)
 service_is_up() {
   case "$1" in
-    nfqws|nfqws2|usque|magitrickle|awg-manager) proc_running "$1" ;;
+    nfqws|nfqws2|usque|magitrickle|awg-manager|telemt) proc_running "$1" ;;
     # tg-ws-proxy-rs содержит "tg-ws-proxy" подстрокой, поэтому у Go-сборки
     # совпадение по целому имени команды, а у Rust — по своей строке.
     tg-ws-proxy)    proc_running_exact "tg-ws-proxy" ;;
@@ -1294,26 +1294,12 @@ show_installed() {
     extras="${extras}tool|dpi-detector|${dpi_ver:-ok}|
 "
   fi
-  if [ -x /opt/usr/bin/telemt ] || [ -x /opt/etc/init.d/S99telemt ] || [ -d /opt/etc/telemt ]; then
+  if [ -x /usr/bin/telemt ] || [ -f /etc/init.d/telemt ]; then
     _tm_ver=""
-    [ -f /opt/etc/telemt/.version ] && _tm_ver=$(head -n1 /opt/etc/telemt/.version 2>/dev/null | tr -d ' \r\n')
-    case "$_tm_ver" in v*|V*) _tm_ver=$(printf '%s' "$_tm_ver" | sed 's/^[vV]//') ;; esac
-    if [ -z "$_tm_ver" ] && [ -x /opt/usr/bin/telemt ]; then
-      _tm_ver=$(/opt/usr/bin/telemt --version 2>/dev/null | head -n1 | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+    if [ -x /usr/bin/telemt ]; then
+      _tm_ver=$(/usr/bin/telemt --version 2>/dev/null | head -n1 | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
     fi
     extras="${extras}tool|telemt|${_tm_ver:-ok}|telemt
-"
-  fi
-  if [ -x /opt/sbin/telemt-panel ] || [ -x /opt/etc/init.d/S99telemt-panel ] || [ -d /opt/etc/telemt-panel ]; then
-    _tp_ver=""
-    # GitHub/бинарник — не в opkg; версия только из .version (пишет установщик)
-    [ -f /opt/etc/telemt-panel/.version ] && _tp_ver=$(head -n1 /opt/etc/telemt-panel/.version 2>/dev/null | tr -d ' \r\n')
-    case "$_tp_ver" in v*|V*) _tp_ver=$(printf '%s' "$_tp_ver" | sed 's/^[vV]//') ;; esac
-    if [ -z "$_tp_ver" ]; then
-      _tp_ver=$(opkg list-installed 2>/dev/null | awk '/^telemt-panel[ -]/{print $3; exit}')
-      case "$_tp_ver" in *-* ) _tp_ver=$(printf '%s' "$_tp_ver" | cut -d- -f1) ;; esac
-    fi
-    extras="${extras}tool|telemt-panel|${_tp_ver:-ok}|telemt-panel
 "
   fi
   # awg без opkg-пакета, но с каталогом
@@ -1468,19 +1454,22 @@ show_installed() {
         m = mark_run(up) mark_upd("awg-manager", ("awg-manager" in opkg) ? opkg["awg-manager"] : "")
         row("awg-manager", aver, m)
       }
-      if ("telemt" in tools) {
+      if ("luci-app-telemt" in opkg) {
+        m = mark_run(proc_has("telemt")) mark_upd("luci-app-telemt", opkg["luci-app-telemt"])
+        row("luci-app-telemt", opkg["luci-app-telemt"], m)
+      }
+      if ("telemt" in opkg) {
+        m = mark_run(proc_has("telemt")) mark_upd("telemt", opkg["telemt"])
+        row("telemt", opkg["telemt"], m)
+      } else if ("telemt" in tools) {
         m = mark_run(proc_has("telemt"))
         row("telemt", tools["telemt"], m)
-      }
-      if ("telemt-panel" in tools) {
-        m = mark_run(proc_has("telemt-panel"))
-        row("telemt-panel", tools["telemt-panel"], m)
       }
 
       # прочие init.d
       skip["nfqws"]=1; skip["nfqws2"]=1; skip["lighttpd"]=1; skip["usque"]=1
       skip["tg-ws-proxy"]=1; skip["tg-ws-proxy-rs"]=1; skip["magitrickle"]=1
-      skip["telemt"]=1; skip["telemt-panel"]=1
+      skip["telemt"]=1; skip["luci-app-telemt"]=1
       if (("awg-manager" in opkg) || awgdir) skip["awg-manager"]=1
       for (svc in inits) {
         if (svc in skip) continue
@@ -3113,9 +3102,9 @@ DOT_DOH_STRATEGY_NFQWS2='#DNS
 
 # Fallback для nfqws1 (классический dpi-desync)
 DOT_DOH_STRATEGY_NFQWS1='#DNS
---filter-tcp=443,853 --filter-l7=http,tls --hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,host+2,midsld+2,endsld-2 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/opt/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--filter-tcp=443,853 --filter-l7=http,tls --hostlist-domains=dns.iij.jp,dot.sb,dns.sb,doh.sb,dns.google,dot.pub,doh.pub,controld.com,opendns.com,anycast.censurfridns.dk,dns.alidns.com,libredns.gr,cloudflare-dns.com,one.one.one.one,opennameserver.org,cleanbrowsing.org,dns.adguard-dns.com,dns.comss.one,xbox-dns.ru,dns.malw.link,geohide.ru,dns.nextdns.io,dns10.quad9.net,dns.astracat.network,dns.bezmezhau.com,dns.dns-ai.ru,dns.mafioznik.xyz,free.shecan.ir --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,host+2,midsld+2,endsld-2 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
 --new
---filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.120,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/opt/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
+--filter-tcp=443,853 --filter-l7=http,tls --ipset-ip=104.16.248.249,104.16.249.249,91.239.100.100,89.233.43.71,8.8.8.8,8.8.4.4,1.12.12.12,120.53.53.120,208.67.222.222,208.67.220.220,223.5.5.5,223.6.6.6,116.202.176.26,1.1.1.1,1.0.0.1,1.1.1.2,1.0.0.2,1.1.1.3,1.0.0.3,217.160.70.42,213.202.211.221,81.169.136.222,185.181.61.24,185.228.168.9,185.228.169.9,94.140.14.14,94.140.15.15,94.140.14.140,94.140.14.141,94.140.14.15,94.140.15.16,45.90.28.94,45.90.30.94,76.76.2.11,76.76.10.11,9.9.9.9,9.9.9.10,149.112.112.112,185.222.222.222,45.11.45.11,172.104.93.80 --dpi-desync=multisplit,fake --dpi-desync-split-pos=1,27 --dpi-desync-split-seqovl=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=/etc/nfqws/tls_clienthello.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=ozon.ru --dpi-desync-repeats=3
 --new
 --filter-udp=443,853 --filter-l7=quic --hostlist-domains=cloudflare-dns.com,dns.adguard-dns.com,dns.nextdns.io,nextdns.io,dns.google,controld.com --dpi-desync=ipfrag2 --dpi-desync-ipfrag-pos-udp=88'
 
@@ -4907,33 +4896,317 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 15. telemt / telemt-panel — installer_telemt.sh
+# 15. luci-app-telemt — LuCI Web UI + core daemon (Medvedolog/luci-app-telemt)
 # ---------------------------------------------------------------------------
-TELEMT_BUNDLE_URL="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/installer_telemt.sh"
+LUCI_TELEMT_REPO="Medvedolog/luci-app-telemt"
+LUCI_TELEMT_VER="3.5.8"
+TELEMT_OWRT_REPO="Medvedolog/telemt_owrt"
+TELEMT_OWRT_TAG="3.5.8-2"
+TELEMT_OWRT_VER="3.5.8-r2"
 
 is_telemt_installed() {
-  [ -x /opt/usr/bin/telemt ] || [ -x /opt/etc/init.d/S99telemt ] || \
-    [ -d /opt/etc/telemt ] || [ -x /opt/sbin/telemt-panel ] || \
-    [ -x /opt/etc/init.d/S99telemt-panel ] || [ -d /opt/etc/telemt-panel ]
+  is_installed "luci-app-telemt" || is_installed "telemt" || \
+    [ -x /usr/bin/telemt ] || [ -f /etc/init.d/telemt ] || [ -f /etc/config/telemt ]
+}
+
+_telemt_detect_core_arch() {
+  [ -z "$ARCH" ] && detect_arch
+  local raw="${DISTRIB_ARCH_VAL:-$ARCH_RAW}"
+  case "$ARCH" in
+    aarch64)
+      case "$raw" in
+        *cortex-a53*) echo "aarch64_cortex-a53" ;;
+        *)            echo "aarch64_generic" ;;
+      esac
+      ;;
+    x86_64)
+      echo "x86_64"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+install_luci_telemt() {
+  local core_arch sel_arch="" core_fn core_url luci_fn luci_url
+  local dest_core dest_luci backend arch_choice
+
+  backend=$(pkg_backend)
+  core_arch=$(_telemt_detect_core_arch)
+
+  echo
+  info "Подготовка к установке luci-app-telemt..."
+  printf '%s\n' "  Пакетный менеджер: ${backend}"
+  printf '%s\n' "  Архитектура роутера: ${ARCH:-unknown} (${DISTRIB_ARCH_VAL:-$ARCH_RAW})"
+  echo
+
+  if [ -n "$core_arch" ]; then
+    info "Автоопределение архитектуры ядра: ${core_arch}"
+    echo "  1) ${core_arch} (рекомендуется)"
+    echo "  2) aarch64_cortex-a53"
+    echo "  3) aarch64_generic"
+    echo "  4) x86_64"
+    echo "  5) Только веб-интерфейс luci-app-telemt (без ядра)"
+    ask "Выберите вариант [1]: "
+    read -r arch_choice
+    case "$arch_choice" in
+      2) sel_arch="aarch64_cortex-a53" ;;
+      3) sel_arch="aarch64_generic" ;;
+      4) sel_arch="x86_64" ;;
+      5) sel_arch="" ;;
+      1|"") sel_arch="$core_arch" ;;
+      *) warn "Неверный выбор, используется ${core_arch}"; sel_arch="$core_arch" ;;
+    esac
+  else
+    warn "Официальные прекомпилированные пакеты telemt_owrt собраны под aarch64 и x86_64."
+    warn "Для архитектуры ${ARCH:-unknown} ядро telemt потребуется собрать или установить отдельно."
+    if ! confirm_yes "Продолжить установку веб-интерфейса luci-app-telemt?"; then
+      return 0
+    fi
+    sel_arch=""
+  fi
+
+  # 1. Установка ядра telemt (если выбрана архитектура)
+  if [ -n "$sel_arch" ]; then
+    if [ "$backend" = "apk" ]; then
+      core_fn="telemt-${TELEMT_OWRT_VER}_${sel_arch}.apk"
+    else
+      core_fn="telemt_${TELEMT_OWRT_VER}_${sel_arch}.ipk"
+    fi
+    core_url="https://github.com/${TELEMT_OWRT_REPO}/releases/download/${TELEMT_OWRT_TAG}/${core_fn}"
+    dest_core="/tmp/${core_fn}"
+
+    info "Скачивание ядра telemt (${core_fn})..."
+    rm -f "$dest_core"
+    if ! download_file "$core_url" "$dest_core" progress; then
+      error "Не удалось скачать ядро telemt (${core_fn})."
+      rm -f "$dest_core"
+      return 1
+    fi
+
+    info "Установка пакета ядра ${core_fn}..."
+    if [ "$backend" = "apk" ]; then
+      if ! apk add --allow-untrusted "$dest_core"; then
+        warn "Ошибка при apk add для ${core_fn}."
+      fi
+    else
+      if ! opkg install "$dest_core"; then
+        warn "Ошибка при opkg install для ${core_fn}."
+      fi
+    fi
+    rm -f "$dest_core"
+  fi
+
+  # 2. Установка зависимостей LuCI
+  info "Установка зависимостей (luci-base, luci-compat, ca-bundle, qrencode)..."
+  pkg_install luci-base luci-compat ca-bundle qrencode 2>/dev/null || true
+
+  # 3. Установка luci-app-telemt
+  if [ "$backend" = "apk" ]; then
+    luci_fn="luci-app-telemt-${LUCI_TELEMT_VER}-r1.apk"
+  else
+    luci_fn="luci-app-telemt_${LUCI_TELEMT_VER}-r1_all.ipk"
+  fi
+  luci_url="https://github.com/${LUCI_TELEMT_REPO}/releases/download/${LUCI_TELEMT_VER}/${luci_fn}"
+  dest_luci="/tmp/${luci_fn}"
+
+  info "Скачивание веб-интерфейса ${luci_fn}..."
+  rm -f "$dest_luci"
+  if ! download_file "$luci_url" "$dest_luci" progress; then
+    # Fallback на стабильную версию 3.4.0
+    warn "Попытка загрузки версии 3.4.0..."
+    if [ "$backend" = "apk" ]; then
+      luci_fn="luci-app-telemt_3.4.0_noarch.apk"
+    else
+      luci_fn="luci-app-telemt_3.4.0_all.ipk"
+    fi
+    luci_url="https://github.com/${LUCI_TELEMT_REPO}/releases/download/3.4.0/${luci_fn}"
+    dest_luci="/tmp/${luci_fn}"
+    if ! download_file "$luci_url" "$dest_luci" progress; then
+      error "Не удалось скачать luci-app-telemt."
+      rm -f "$dest_luci"
+      return 1
+    fi
+  fi
+
+  info "Установка пакета ${luci_fn}..."
+  if [ "$backend" = "apk" ]; then
+    if ! apk add --allow-untrusted "$dest_luci"; then
+      error "Не удалось установить ${luci_fn}."
+      rm -f "$dest_luci"
+      return 1
+    fi
+  else
+    if ! opkg install "$dest_luci"; then
+      error "Не удалось установить ${luci_fn}."
+      rm -f "$dest_luci"
+      return 1
+    fi
+  fi
+  rm -f "$dest_luci"
+
+  # Очистка кешей LuCI
+  rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null || true
+  refresh_opkg_cache
+
+  # Включение автозапуска сервиса procd
+  if [ -x /etc/init.d/telemt ]; then
+    /etc/init.d/telemt enable 2>/dev/null || true
+  fi
+
+  echo
+  info "Установка luci-app-telemt успешно завершена!"
+  local lan_ip; lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>")
+  printf '%s\n' "  Веб-интерфейс доступен в LuCI:"
+  printf '%s\n' "  ${GREEN}${BOLD}http://${lan_ip}/cgi-bin/luci/admin/services/telemt${NC}"
+  echo
+
+  if [ -x /etc/init.d/telemt ]; then
+    if confirm_yes "Запустить сервис telemt прямо сейчас?"; then
+      /etc/init.d/telemt restart
+    fi
+  fi
+  return 0
 }
 
 remove_telemt() {
   echo
-  info "Удаление telemt / telemt-panel..."
-  /opt/etc/init.d/S99telemt-panel stop 2>/dev/null || true
-  /opt/etc/init.d/S99telemt stop 2>/dev/null || true
-  rm -f /opt/etc/init.d/S99telemt /opt/etc/init.d/S99telemt-panel
-  rm -f /opt/usr/bin/telemt /opt/sbin/telemt-panel
-  rm -rf /opt/etc/telemt /opt/etc/telemt-panel
-  rm -rf /opt/tmp/telemt_dl /opt/tmp/telemt-panel-install
-  rm -rf /tmp/telemt_dl /tmp/telemt-panel-dl
-  rm -f /tmp/log/telemt.log /tmp/cache/beobachten.txt
-  info "telemt / telemt-panel удалены."
+  info "Удаление luci-app-telemt и telemt..."
+  if [ -x /etc/init.d/telemt ]; then
+    /etc/init.d/telemt stop 2>/dev/null || true
+    /etc/init.d/telemt disable 2>/dev/null || true
+  fi
+  pkg_remove luci-app-telemt telemt 2>/dev/null || true
+  rm -f /usr/bin/telemt /etc/init.d/telemt
+  rm -rf /tmp/etc/telemt.toml /tmp/telemt* /tmp/luci-app-telemt*
+  rm -rf /tmp/luci-indexcache /tmp/luci-modulecache 2>/dev/null || true
+  if [ -f /etc/config/telemt ]; then
+    if confirm_no "Удалить конфигурацию и секреты (/etc/config/telemt)?"; then
+      rm -f /etc/config/telemt
+      info "Конфигурация /etc/config/telemt удалена."
+    else
+      info "Конфигурация сохранена в /etc/config/telemt."
+    fi
+  fi
+  refresh_opkg_cache
+  info "luci-app-telemt и telemt удалены."
+}
+
+telemt_show_info() {
+  echo
+  printf '%s\n' "${CYAN}${BOLD}Параметры сервиса telemt (из UCI /etc/config/telemt):${NC}"
+  if ! [ -f /etc/config/telemt ]; then
+    warn "Конфигурационный файл /etc/config/telemt не найден."
+    return 0
+  fi
+  local port host secret lan_ip
+  port=$(uci get telemt.main.port 2>/dev/null || echo "не задан")
+  host=$(uci get telemt.main.mask_host 2>/dev/null || echo "не задан")
+  secret=$(uci get telemt.main.secret 2>/dev/null || echo "")
+  lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>")
+
+  printf '  Порт:       %s\n' "$port"
+  printf '  Маскировка: %s\n' "$host"
+  [ -n "$secret" ] && printf '  Секрет:     %s\n' "$secret"
+  echo
+  printf '%s\n' "  Веб-интерфейс LuCI (настройка, пользователи, QR-коды):"
+  printf '%s\n' "  ${GREEN}${BOLD}http://${lan_ip}/cgi-bin/luci/admin/services/telemt${NC}"
 }
 
 menu_telemt() {
-  require_entware || return 1
-  run_menu_remote_sh "15" "telemt / telemt-panel" "$TELEMT_BUNDLE_URL" 2000 || return 1
+  local choice lan_ip ver_luci ver_core svc_st
+  while :; do
+    echo
+    printf '%s\n' "${CYAN}${BOLD}              luci-app-telemt (MTProxy для OpenWrt)${NC}"
+    printf '%s\n' "${DIM}     LuCI: https://github.com/Medvedolog/luci-app-telemt${NC}"
+    printf '%s\n' "${DIM}     Core: https://github.com/Medvedolog/telemt_owrt${NC}"
+    echo
+
+    if is_installed "luci-app-telemt"; then
+      ver_luci=$(pkg_version "luci-app-telemt")
+      printf '  Веб-интерфейс LuCI:  %sустановлен%s (%s)\n' "${GREEN}" "${NC}" "${ver_luci:-ok}"
+    else
+      printf '  Веб-интерфейс LuCI:  %sне установлен%s\n' "${YELLOW}" "${NC}"
+    fi
+
+    if [ -x /usr/bin/telemt ]; then
+      ver_core=$(/usr/bin/telemt --version 2>/dev/null | head -n1 | sed -n 's/.*\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')
+      [ -z "$ver_core" ] && ver_core=$(pkg_version "telemt")
+      printf '  Ядро telemt:         %sустановлено%s (/usr/bin/telemt %s)\n' "${GREEN}" "${NC}" "${ver_core:-ok}"
+    else
+      printf '  Ядро telemt:         %sне установлено%s\n' "${YELLOW}" "${NC}"
+    fi
+
+    if [ -x /etc/init.d/telemt ]; then
+      if proc_running "telemt"; then
+        svc_st="${GREEN}запущен (⚡)${NC}"
+      else
+        svc_st="${RED}остановлен${NC}"
+      fi
+      printf '  Сервис telemt:       %s\n' "$svc_st"
+    fi
+
+    lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>")
+    printf '  Ссылка в LuCI:       http://%s/cgi-bin/luci/admin/services/telemt\n' "$lan_ip"
+    echo
+    echo "  1. Установить / обновить luci-app-telemt и ядро telemt"
+    echo "  2. Запустить сервис telemt"
+    echo "  3. Перезапустить сервис telemt"
+    echo "  4. Остановить сервис telemt"
+    echo "  5. Журнал сервиса (logread / telemt)"
+    echo "  6. Параметры подключения (UCI)"
+    echo "  7. Удалить luci-app-telemt и ядро"
+    echo "  0. ${LBL_BACK_ITEM:-Назад}"
+    echo
+    ask "${LBL_YOUR_CHOICE:-Ваш выбор} [0]: "
+    read -r choice
+
+    case "$choice" in
+      0|"") return 0 ;;
+      1) install_luci_telemt ;;
+      2)
+        if [ -x /etc/init.d/telemt ]; then
+          /etc/init.d/telemt start
+          info "Команда start отправлена."
+        else
+          warn "Сервис /etc/init.d/telemt не найден."
+        fi
+        ;;
+      3)
+        if [ -x /etc/init.d/telemt ]; then
+          /etc/init.d/telemt restart
+          info "Команда restart отправлена."
+        else
+          warn "Сервис /etc/init.d/telemt не найден."
+        fi
+        ;;
+      4)
+        if [ -x /etc/init.d/telemt ]; then
+          /etc/init.d/telemt stop
+          info "Сервис telemt остановлен."
+        else
+          warn "Сервис /etc/init.d/telemt не найден."
+        fi
+        ;;
+      5)
+        echo
+        info "Последние записи журнала telemt:"
+        if command -v logread >/dev/null 2>&1; then
+          logread -e telemt | tail -n 25
+        else
+          cat /var/log/telemt.log 2>/dev/null | tail -n 25 || warn "Логи не найдены."
+        fi
+        ;;
+      6) telemt_show_info ;;
+      7)
+        if confirm_yes "Точно удалить luci-app-telemt и ядро telemt?"; then
+          remove_telemt
+        fi
+        ;;
+      *) warn "${LBL_INVALID:-Неверный выбор}" ;;
+    esac
+  done
 }
 
 
@@ -5490,7 +5763,7 @@ menu_remove() {
   is_installed "usque-keenetic"     && items="$items usque-keenetic"
   is_installed "magitrickle"        && items="$items magitrickle"
   is_installed "opera-proxy"        && items="$items opera-proxy"
-  is_telemt_installed               && items="$items telemt"
+  is_telemt_installed               && items="$items luci-app-telemt"
 
   if [ -n "$items" ]; then
     for p in $items; do
@@ -5536,7 +5809,7 @@ menu_remove() {
         usque-keenetic) remove_usque_keenetic ;;
         magitrickle)   remove_magitrickle ;;
         opera-proxy)   remove_opera_proxy ;;
-        telemt)        remove_telemt ;;
+        telemt|luci-app-telemt) remove_telemt ;;
         nfqws-keenetic|nfqws2-keenetic)
           remove_nfqws_pkg "$target" || true
           info "$target удалён."
@@ -5965,7 +6238,7 @@ main_menu() {
     echo "      11. awg-manager"
     echo "      13. usque-keenetic"
     echo "      14. MagiTrickle"
-    echo "      15. telemt / telemt-panel"
+    echo "      15. luci-app-telemt (MTProxy)"
     echo "      16. TG WS Proxy Rust"
     echo
     printf '%s\n' "${CYAN}${BOLD}[::]  ${LBL_REMOVE} [${GREEN}S${CYAN}${BOLD}]  |  ${LBL_LANG} [${GREEN}77${CYAN}${BOLD}]${NC}"
