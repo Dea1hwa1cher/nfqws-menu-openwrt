@@ -4097,13 +4097,20 @@ update_self() {
 DPI_DETECTOR_INSTALL_URL="https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh"
 AWG_MANAGER_INSTALL_URL="https://raw.githubusercontent.com/rndnaame/awg-compressed/main/install-compressed.sh"
 
-# dpi-detector сам выбирает каталог: /opt/bin (Entware/Keenetic) или
-# /usr/local/bin (OpenWrt — персистентный overlay)
+# dpi-detector: приоритет /usr/bin (OpenWrt), fallback /usr/local/bin или /tmp
 dpi_detector_bin() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then
+  if [ -x /usr/bin/dpi-detector ]; then
+    echo "/usr/bin/dpi-detector"
+  elif [ -x /usr/local/bin/dpi-detector ]; then
     echo "/usr/local/bin/dpi-detector"
-  else
+  elif command -v dpi-detector >/dev/null 2>&1; then
+    command -v dpi-detector
+  elif [ -x /opt/bin/dpi-detector ]; then
     echo "/opt/bin/dpi-detector"
+  elif [ -x /tmp/dpi-detector ]; then
+    echo "/tmp/dpi-detector"
+  else
+    echo "/usr/bin/dpi-detector"
   fi
 }
 
@@ -4114,15 +4121,20 @@ cleanup_dpi_detector_dupes() {
   elif command -v dpi-detector >/dev/null 2>&1; then
     primary=$(command -v dpi-detector)
   fi
+  [ -z "$primary" ] && return 0
   for f in /tmp/dpi-detector /opt/root/dpi-detector ${HOME:+$HOME/dpi-detector} /tmp/dpi-detector* /opt/root/dpi-detector*; do
     [ -f "$f" ] || continue
-    [ -n "$primary" ] && [ "$f" = "$primary" ] && continue
-    [ -n "$primary" ] && [ -f "$primary" ] && rm -f "$f" && info "  удалён дубликат: $f"
+    [ "$f" = "$primary" ] && continue
+    rm -f "$f" && info "  удалён дубликат: $f"
   done
-  # путь основного бинарника не печатаем здесь — его уже показывает menu_dpi_detector
 }
 
 menu_dpi_detector() {
+  # Если бинарник был сохранён в /tmp, но отсутствует в /usr/bin — переносим в /usr/bin
+  if [ ! -x /usr/bin/dpi-detector ] && [ -x /tmp/dpi-detector ]; then
+    cp -f /tmp/dpi-detector /usr/bin/dpi-detector 2>/dev/null && chmod +x /usr/bin/dpi-detector
+  fi
+
   if [ -x "$(dpi_detector_bin)" ]; then
     echo
     info "Открываем: 10. dpi-detector"
@@ -4136,9 +4148,21 @@ menu_dpi_detector() {
     fi
     return 0
   fi
+
+  export DPI_INSTALL_DIR="/usr/bin"
   run_menu_remote_sh "10" "dpi-detector" "$DPI_DETECTOR_INSTALL_URL" || return 1
+
+  # Если установщик сохранил бинарник в /tmp или /usr/local/bin — переносим в /usr/bin
+  if [ ! -x /usr/bin/dpi-detector ]; then
+    if [ -x /usr/local/bin/dpi-detector ]; then
+      cp -f /usr/local/bin/dpi-detector /usr/bin/dpi-detector 2>/dev/null && chmod +x /usr/bin/dpi-detector
+    elif [ -x /tmp/dpi-detector ]; then
+      cp -f /tmp/dpi-detector /usr/bin/dpi-detector 2>/dev/null && chmod +x /usr/bin/dpi-detector
+    fi
+  fi
+
   echo
-  info "Очистка дубликатов dpi-detector (/tmp, /opt/root)..."
+  info "Очистка дубликатов dpi-detector (/tmp)..."
   cleanup_dpi_detector_dupes
   if [ -x "$(dpi_detector_bin)" ]; then
     info "Запуск $(dpi_detector_bin) ..."
@@ -5246,7 +5270,7 @@ dpi_detector_version() {
 }
 
 remove_dpi_detector() {
-  local paths="$(dpi_detector_bin) /tmp/dpi-detector" f found=0
+  local paths="$(dpi_detector_bin) /usr/bin/dpi-detector /usr/local/bin/dpi-detector /tmp/dpi-detector" f found=0
   [ -n "$HOME" ] && paths="$paths $HOME/dpi-detector"
   for f in $paths; do
     [ -f "$f" ] && rm -f "$f" && info "  удалён: $f" && found=1
@@ -5827,7 +5851,11 @@ opkg_upgrade_all() {
   # dpi-detector ставится не через opkg — обновляем отдельно, если уже установлен
   if [ -x "$(dpi_detector_bin)" ]; then
     info "Найден $(dpi_detector_bin) — обновление..."
+    export DPI_INSTALL_DIR="/usr/bin"
     if run_remote_sh "${DPI_DETECTOR_INSTALL_URL:-https://raw.githubusercontent.com/Runnin4ik/dpi-detector/rust/install.sh}"; then
+      if [ ! -x /usr/bin/dpi-detector ] && [ -x /tmp/dpi-detector ]; then
+        cp -f /tmp/dpi-detector /usr/bin/dpi-detector 2>/dev/null && chmod +x /usr/bin/dpi-detector
+      fi
       info "dpi-detector обновлён."
     else
       warn "Не удалось обновить dpi-detector."

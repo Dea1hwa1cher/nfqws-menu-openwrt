@@ -97,7 +97,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 
 | Утилита | OpenWrt |
 | --- | --- |
-| 10. dpi-detector | ставится нативно (бинарь в `/usr/local/bin`) |
+| 10. dpi-detector | ставится нативно (бинарь в `/usr/bin`) |
 | 14. MagiTrickle | нативный пакет (opkg/apk-фид, сервис `/etc/init.d/magitrickle`) |
 | 15. luci-app-telemt | нативный пакет MTProxy + веб-интерфейс LuCI (`luci-app-telemt` + `telemt`) |
 | 16. tg-ws-proxy-rs | нативная ветка установщика (LuCI, `/usr/bin`, `/etc/init.d/tg-ws-proxy-rs`) |
