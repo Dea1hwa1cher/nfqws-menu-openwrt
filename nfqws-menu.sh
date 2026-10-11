@@ -17,7 +17,7 @@ RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
 
 # Туннели для fallback-скачивания, если основной канал недоступен (DPI и т.п.)
-# Порядок = приоритет. opkgtun0 — usque; opgktun0 — на случай другого имени.
+# Порядок = приоритет. opkgtun0 / opgktun0 — резервные туннельные интерфейсы.
 FALLBACK_IFACES="awg0 t2s0 nwg0 opkgtun0 opgktun0"
 
 # Таймауты скачивания (сек). Чуть выше для сильного DPI, но не слишком —
@@ -1090,7 +1090,7 @@ detect_arch() {
   print_arch_line
 
   if [ -z "$ARCH" ]; then
-    warn "ARCH не определена — установка NFQWS/usque по архитектуре может быть недоступна."
+    warn "ARCH не определена — установка NFQWS по архитектуре может быть недоступна."
   fi
   return 0
 }
@@ -1244,7 +1244,7 @@ EOF
 # kind → «запущен?» (по процессу / порту)
 service_is_up() {
   case "$1" in
-    nfqws|nfqws2|usque|magitrickle|awg-manager|telemt) proc_running "$1" ;;
+    nfqws|nfqws2|magitrickle|awg-manager|telemt) proc_running "$1" ;;
     # tg-ws-proxy-rs содержит "tg-ws-proxy" подстрокой, поэтому у Go-сборки
     # совпадение по целому имени команды, а у Rust — по своей строке.
     tg-ws-proxy)    proc_running_exact "tg-ws-proxy" ;;
@@ -1429,10 +1429,6 @@ show_installed() {
         m = mark_run(WEB_UP || proc_has("lighttpd")) mark_upd("nfqws-keenetic-web", opkg["nfqws-keenetic-web"])
         row("nfqws-keenetic-web", opkg["nfqws-keenetic-web"], m)
       }
-      if ("usque-keenetic" in opkg) {
-        m = mark_run(proc_has("usque")) mark_upd("usque-keenetic", opkg["usque-keenetic"])
-        row("usque-keenetic", opkg["usque-keenetic"], m)
-      }
       # tools (tg-ws, dpi, keenkit, telemt)
       if ("tg-ws-proxy-rs" in tools) {
         m = mark_run(proc_has("tg-ws-proxy-rs")) mark_upd("tg-ws-proxy-rs", tools["tg-ws-proxy-rs"])
@@ -1467,7 +1463,7 @@ show_installed() {
       }
 
       # прочие init.d
-      skip["nfqws"]=1; skip["nfqws2"]=1; skip["lighttpd"]=1; skip["usque"]=1
+      skip["nfqws"]=1; skip["nfqws2"]=1; skip["lighttpd"]=1
       skip["tg-ws-proxy"]=1; skip["tg-ws-proxy-rs"]=1; skip["magitrickle"]=1
       skip["telemt"]=1; skip["luci-app-telemt"]=1
       if (("awg-manager" in opkg) || awgdir) skip["awg-manager"]=1
@@ -4828,19 +4824,6 @@ remove_tg_ws_proxy_rs() {
   return 0
 }
 
-# 13. usque-keenetic  (installer_usque.sh in this repo)
-USQUE_INSTALL_URL="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main/installer_usque.sh"
-
-menu_usque_keenetic() {
-  require_entware || return 1
-  # min=2000: installer_usque.sh ~5 КБ
-  if ! run_menu_remote_sh "13" "usque-keenetic" "$USQUE_INSTALL_URL" 2000; then
-    error "Установщик usque-keenetic завершился с ошибкой."
-    return 1
-  fi
-  refresh_opkg_cache 2>/dev/null || true
-}
-
 menu_magitrickle() {
   echo
   info "MagiTrickle"
@@ -5287,16 +5270,6 @@ remove_awg_manager() {
   fi
   [ -d /opt/etc/awg-manager ] && rm -rf /opt/etc/awg-manager && info "  удалён каталог: /opt/etc/awg-manager"
   info "awg-manager удалён."
-}
-
-remove_usque_keenetic() {
-  if is_installed "usque-keenetic"; then
-    pkg_remove usque-keenetic 2>/dev/null || true
-    info "usque-keenetic удалён."
-  else
-    warn "usque-keenetic не установлен."
-  fi
-  [ -f /opt/etc/opkg/usque-keenetic.conf ] && rm -f /opt/etc/opkg/usque-keenetic.conf && info "  удалён: /opt/etc/opkg/usque-keenetic.conf"
 }
 
 
@@ -5760,7 +5733,6 @@ menu_remove() {
   is_dpi_detector_installed         && items="$items dpi-detector"
   is_awg_manager_installed          && items="$items awg-manager"
   is_tg_ws_proxy_rs_installed       && items="$items tg-ws-proxy-rs"
-  is_installed "usque-keenetic"     && items="$items usque-keenetic"
   is_installed "magitrickle"        && items="$items magitrickle"
   is_installed "opera-proxy"        && items="$items opera-proxy"
   is_telemt_installed               && items="$items luci-app-telemt"
@@ -5806,7 +5778,6 @@ menu_remove() {
         dpi-detector)  remove_dpi_detector ;;
         awg-manager)   remove_awg_manager ;;
         tg-ws-proxy-rs) remove_tg_ws_proxy_rs ;;
-        usque-keenetic) remove_usque_keenetic ;;
         magitrickle)   remove_magitrickle ;;
         opera-proxy)   remove_opera_proxy ;;
         telemt|luci-app-telemt) remove_telemt ;;
@@ -6236,7 +6207,6 @@ main_menu() {
     printf '%s\n' "${CYAN}${BOLD}[::]  ${LBL_UTILS}${NC}"
     echo "      10. dpi-detector"
     echo "      11. awg-manager"
-    echo "      13. usque-keenetic"
     echo "      14. MagiTrickle"
     echo "      15. luci-app-telemt (MTProxy)"
     echo "      16. TG WS Proxy Rust"
@@ -6267,7 +6237,6 @@ main_menu() {
       8)  menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
       11) menu_awg_manager || true ;;
-      13) menu_usque_keenetic || true ;;
       14) menu_magitrickle || true ;;
       15) menu_telemt || true ;;
       16) menu_tg_ws_proxy_rs || true ;;
