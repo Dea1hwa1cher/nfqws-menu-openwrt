@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.3**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.4**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -99,9 +99,9 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 | --- | --- |
 | 10. dpi-detector | ставится нативно (бинарь в `/usr/bin`) |
 | 11. awg-openwrt | AmneziaWG 3.1 (ядро `kmod-amneziawg`, утилиты `amneziawg-tools`, LuCI `luci-proto-amneziawg`) |
-| 14. MagiTrickle | нативный пакет (opkg/apk-фид, сервис `/etc/init.d/magitrickle`) |
-| 15. luci-app-telemt | нативный пакет MTProxy + веб-интерфейс LuCI (`luci-app-telemt` + `telemt`) |
-| 16. tg-ws-proxy-rs | нативная ветка установщика (LuCI, `/usr/bin`, `/etc/init.d/tg-ws-proxy-rs`) |
+| 12. MagiTrickle | нативный пакет (opkg/apk-фид, сервис `/etc/init.d/magitrickle`) |
+| 13. luci-app-telemt | нативный пакет MTProxy + веб-интерфейс LuCI (`luci-app-telemt` + `telemt`) |
+| 14. tg-ws-proxy-rs | нативная ветка установщика (LuCI, `/usr/bin`, `/etc/init.d/tg-ws-proxy-rs`) |
 
 Проверено на реальном устройстве: Xiaomi Mi Router R3, OpenWrt 24.10.1 (mipsel_24kc, fw4).
 
@@ -136,9 +136,9 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 [::]  УТИЛИТЫ
       10. dpi-detector
       11. awg-openwrt (AmneziaWG)
-      14. MagiTrickle
-      15. luci-app-telemt (MTProxy)
-      16. TG WS Proxy Rust
+      12. MagiTrickle
+      13. luci-app-telemt (MTProxy)
+      14. TG WS Proxy Rust
 
 [::]  СЕРВИС [S]  |  Language: RU|EN [77]
       88. Удаление пакетов
@@ -306,7 +306,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 - **Просмотр состояния** интерфейсов и пиров (`awg show`).
 - **Корректное удаление** пакетов и сторонних репозиториев/ключей из системы.
 
-### 14. MagiTrickle
+### 12. MagiTrickle
 
 Утилита для точечной маршрутизации сетевого трафика по заданным доменным именам.
 
@@ -316,7 +316,14 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 - Init: `/etc/init.d/magitrickle` (procd)
 - Удаление — в п. 88 (с опциональным удалением файла репозитория)
 
-### 16. TG WS Proxy Rust (tg-ws-proxy-rs)
+### 13. luci-app-telemt (MTProxy)
+
+MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/luci-app-telemt](https://github.com/Medvedolog/luci-app-telemt)):
+- Нативная установка пакетов `luci-app-telemt` и ядра `telemt` из релизов GitHub.
+- Веб-интерфейс в LuCI: `Службы` → `Telemt MTProxy`.
+- Управление сервисом (`/etc/init.d/telemt` start/stop/restart), просмотр логов и параметров подключения.
+
+### 14. TG WS Proxy Rust (tg-ws-proxy-rs)
 
 [tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) — MTProto-прокси на Rust с LuCI-интеграцией на OpenWrt 24.10+. Меню добавляет:
 
@@ -368,6 +375,13 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 ---
 
 ## Changelog
+
+### 0.1.4
+
+- **Рефакторинг и очистка кода**: удалены мёртвые обёртки и устаревшие функции `menu_awg_manager`, `remove_awg_manager` и `is_awg_manager_installed`
+- **Исправление багов**: добавлен недостающий хелпер `pause_press_enter`, устранено аварийное завершение скрипта при вызовах диагностики и статуса интерфейсов AmneziaWG
+- **Нумерация утилит**: нумерация сторонних инструментов в главном меню выстроена последовательно (10. dpi-detector, 11. awg-openwrt, 12. MagiTrickle, 13. luci-app-telemt, 14. TG WS Proxy Rust) с сохранением обратной совместимости ввода
+- **Документация**: актуализирован `README.md`, добавлено описание интеграции `luci-app-telemt`
 
 ### 0.1.3
 

@@ -11,7 +11,7 @@
 
 set -e
 
-SCRIPT_VERSION="0.1.3"
+SCRIPT_VERSION="0.1.4"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -353,6 +353,12 @@ confirm_no() {
   read_menu ans
   case "$ans" in y|Y|д|Д) return 0 ;; esac
   return 1
+}
+
+pause_press_enter() {
+  echo
+  ask "${LBL_BACK:-Нажмите Enter для возврата в меню...}"
+  read_menu _ || true
 }
 
 # Интерфейсы из FALLBACK_IFACES, которые есть в системе и не в состоянии down.
@@ -4286,10 +4292,6 @@ menu_awg_openwrt() {
   done
 }
 
-menu_awg_manager() {
-  menu_awg_openwrt "$@"
-}
-
 # ---------------------------------------------------------------------------
 # TG WS Proxy (Rust) — установка, подбор параметров и сквозная проверка
 # ---------------------------------------------------------------------------
@@ -5012,7 +5014,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 15. luci-app-telemt — LuCI Web UI + core daemon (Medvedolog/luci-app-telemt)
+# 13. luci-app-telemt — LuCI Web UI + core daemon (Medvedolog/luci-app-telemt)
 # ---------------------------------------------------------------------------
 LUCI_TELEMT_REPO="Medvedolog/luci-app-telemt"
 LUCI_TELEMT_VER="3.5.8"
@@ -5397,10 +5399,6 @@ is_awg_openwrt_installed() {
   is_installed "amneziawg-tools" || is_installed "kmod-amneziawg" || is_installed "luci-proto-amneziawg" || [ -d /sys/module/amneziawg ] || command -v awg >/dev/null 2>&1
 }
 
-is_awg_manager_installed() {
-  is_awg_openwrt_installed || [ -d /opt/etc/awg-manager ]
-}
-
 remove_awg_openwrt() {
   pkg_remove luci-i18n-amneziawg-ru luci-proto-amneziawg luci-app-amneziawg amneziawg-tools kmod-amneziawg 2>/dev/null || true
   if [ -f /etc/opkg/customfeeds.conf ]; then
@@ -5416,10 +5414,6 @@ remove_awg_openwrt() {
   [ -d /opt/etc/awg-manager ] && rm -rf /opt/etc/awg-manager && info "  удалён каталог: /opt/etc/awg-manager"
   refresh_opkg_cache
   info "AmneziaWG удалён."
-}
-
-remove_awg_manager() {
-  remove_awg_openwrt
 }
 
 
@@ -6361,9 +6355,9 @@ main_menu() {
     printf '%s\n' "${CYAN}${BOLD}[::]  ${LBL_UTILS}${NC}"
     echo "      10. dpi-detector"
     echo "      11. awg-openwrt (AmneziaWG)"
-    echo "      14. MagiTrickle"
-    echo "      15. luci-app-telemt (MTProxy)"
-    echo "      16. TG WS Proxy Rust"
+    echo "      12. MagiTrickle"
+    echo "      13. luci-app-telemt (MTProxy)"
+    echo "      14. TG WS Proxy Rust"
     echo
     printf '%s\n' "${CYAN}${BOLD}[::]  ${LBL_REMOVE} [${GREEN}S${CYAN}${BOLD}]  |  ${LBL_LANG} [${GREEN}77${CYAN}${BOLD}]${NC}"
     echo "      88. $LBL_88"
@@ -6391,9 +6385,9 @@ main_menu() {
       8)  menu_dns_manage || true ;;
       10) menu_dpi_detector || true ;;
       11) menu_awg_openwrt || true ;;
-      14) menu_magitrickle || true ;;
-      15) menu_telemt || true ;;
-      16) menu_tg_ws_proxy_rs || true ;;
+      12) menu_magitrickle || true ;;
+      13|15) menu_telemt || true ;;
+      14|16) menu_tg_ws_proxy_rs || true ;;
       S|s) menu_service || true ;;
       U|u) opkg_upgrade_all || true ;;
       o|O) menu_opera_hidden || true ;;
