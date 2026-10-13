@@ -11,7 +11,7 @@
 
 set -e
 
-SCRIPT_VERSION="0.1.5"
+SCRIPT_VERSION="0.1.6"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -208,6 +208,7 @@ ui_apply_lang() {
       LBL_UTILS="УТИЛИТЫ"
       LBL_REMOVE="СЕРВИС"
       LBL_S1="Сжать bin/sbin (UPX)"
+      LBL_S2="Сменить / проверить зеркала OpenWrt"
       LBL_U="Обновить все пакеты"
       LBL_1="Установка NFQWS / NFQWS2"
       LBL_3="Выбор стратегии"
@@ -230,6 +231,7 @@ ui_apply_lang() {
       LBL_YOUR_CHOICE="Ваш выбор"
       LBL_CHOICE="Выбор"
       LBL_INSTALL_TITLE="Установка NFQWS / NFQWS2"
+      LBL_INSTALL_DIRECT="Прямая установка .ipk / .apk (обход фида)"
       LBL_IPSET_WARN1="⚠ ОСТОРОЖНО"
       LBL_IPSET_WARN2="Вы собираетесь изменить ipset.list."
       LBL_IPSET_WARN3="Большой список CIDR от Flowseal (33K+) может нагрузить роутер"
@@ -250,6 +252,7 @@ ui_apply_lang() {
       LBL_UTILS="UTILITIES"
       LBL_REMOVE="SERVICE"
       LBL_S1="Compress bin/sbin (UPX)"
+      LBL_S2="Switch / test OpenWrt repository mirrors"
       LBL_U="Upgrade all packages"
       LBL_1="Install NFQWS / NFQWS2"
       LBL_3="Select strategy"
@@ -272,6 +275,7 @@ ui_apply_lang() {
       LBL_YOUR_CHOICE="Your choice"
       LBL_CHOICE="Choice"
       LBL_INSTALL_TITLE="Install NFQWS / NFQWS2"
+      LBL_INSTALL_DIRECT="Direct install .ipk / .apk (bypass feeds)"
       LBL_IPSET_WARN1="⚠ CAUTION"
       LBL_IPSET_WARN2="You are about to change ipset.list."
       LBL_IPSET_WARN3="A large Flowseal CIDR list (33K+) may load the router"
@@ -1604,12 +1608,134 @@ fetch_pkg_version_file() {
   printf '%s\n' "$ver"
 }
 
+# Прямая установка .ipk / .apk из GitHub Releases (обход блокировок фидов)
+install_package_direct() {
+  local pkg="$1" ver repo fn ext backend dest dl_ok=0
+  need_arch || return 1
+  backend=$(pkg_backend)
+  ext="ipk"
+  [ "$backend" = "apk" ] && ext="apk"
+
+  case "$pkg" in
+    nfqws-keenetic)
+      repo="nfqws/nfqws-keenetic"
+      ;;
+    nfqws2-keenetic)
+      repo="nfqws/nfqws2-keenetic"
+      if is_installed "nfqws-keenetic"; then
+        warn "Обнаружен nfqws-keenetic. Рекомендуется удалить его перед установкой nfqws2."
+        if confirm_no "Удалить nfqws-keenetic и веб-интерфейс?"; then
+          stop_nfqws1_hard
+          pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
+          stop_nfqws1_hard
+        fi
+      fi
+      ;;
+    nfqws-keenetic-web)
+      repo="nfqws/nfqws-keenetic-web"
+      ;;
+    *)
+      error "Неизвестный пакет: $pkg"
+      return 1
+      ;;
+  esac
+
+  echo
+  info "Запрос актуальной версии ${pkg} через зеркала..."
+  ver=$(fetch_pkg_version_file "$repo" 2>/dev/null || true)
+  if [ -z "$ver" ]; then
+    case "$pkg" in
+      nfqws-keenetic)     ver="2.11.4" ;;
+      nfqws2-keenetic)    ver="1.3.1" ;;
+      nfqws-keenetic-web) ver="3.0.24" ;;
+    esac
+    warn "Не удалось получить версию из сети, используется базовая: ${ver}"
+  else
+    info "Актуальная версия: ${ver}"
+  fi
+
+  fn="${pkg}_${ver#v}_all_openwrt.${ext}"
+  dest="/tmp/${fn}"
+  rm -f "$dest"
+
+  info "Скачивание пакета ${fn}..."
+  local url1="https://ghproxy.net/https://github.com/${repo}/releases/download/v${ver#v}/${fn}"
+  local url2="https://github.com/${repo}/releases/download/v${ver#v}/${fn}"
+  local url3="https://nfqws.github.io/${pkg}/openwrt/${pkg}_${ver#v}_all.${ext}"
+
+  for u in "$url1" "$url2" "$url3"; do
+    if download_file "$u" "$dest" progress min=200000; then
+      dl_ok=1
+      break
+    fi
+  done
+
+  if [ "$dl_ok" -ne 1 ] || [ ! -f "$dest" ]; then
+    error "Не удалось скачать пакет ${fn} ни с одного зеркала."
+    rm -f "$dest"
+    return 1
+  fi
+
+  # Остановка сервиса перед обновлением бинарника
+  case "$pkg" in
+    nfqws2-keenetic) stop_nfqws2_hard ;;
+    nfqws-keenetic)  stop_nfqws1_hard ;;
+  esac
+
+  info "Установка ${fn}..."
+  if ! pkg_install_file "$dest"; then
+    error "Ошибка установки пакета ${fn}."
+    rm -f "$dest"
+    return 1
+  fi
+  rm -f "$dest"
+  refresh_opkg_cache
+
+  info "Пакет ${pkg} успешно установлен!"
+  case "$pkg" in
+    nfqws-keenetic|nfqws2-keenetic)
+      ask_web_install
+      ;;
+    nfqws-keenetic-web)
+      info "Веб-интерфейс установлен."
+      info "Адрес: http://$(get_lan_ip):90"
+      info "Логин/пароль — учётные данные root-пользователя роутера"
+      ;;
+  esac
+  return 0
+}
+
+menu_install_ipk_direct() {
+  local choice
+  while true; do
+    echo
+    printf '%s\n' "${BOLD}── ${LBL_INSTALL_DIRECT:-Прямая установка .ipk / .apk} ──${NC}"
+    printf '%s\n' "${DIM}Скачивание standalone-пакетов с релизов GitHub / ghproxy.${NC}"
+    printf '%s\n' "${DIM}Формат пакета для текущей системы: %s${NC}" "$(pkg_backend)"
+    echo
+    printf "  %s1)%s  nfqws-keenetic (версия 1)\n" "$GREEN" "$NC"
+    printf "  %s2)%s  nfqws2-keenetic (версия 2)\n" "$GREEN" "$NC"
+    printf "  %s3)%s  nfqws-keenetic-web (веб-интерфейс)\n" "$GREEN" "$NC"
+    printf "  %s0)%s  ${LBL_BACK_ITEM}\n" "$DIM" "$NC"
+    ask "${LBL_YOUR_CHOICE} [0]: "
+    read_menu choice
+    case "$choice" in
+      1) install_package_direct "nfqws-keenetic" ;;
+      2) install_package_direct "nfqws2-keenetic" ;;
+      3) install_package_direct "nfqws-keenetic-web" ;;
+      0|"") return 0 ;;
+      *) warn "${LBL_INVALID}" ;;
+    esac
+  done
+}
+
 menu_install_nfqws() {
   echo
   printf '%s\n' "${BOLD}── ${LBL_INSTALL_TITLE} ──${NC}"
   printf "  %s1)%s  nfqws-keenetic\n" "$GREEN" "$NC"
   printf "  %s2)%s  nfqws2-keenetic\n" "$GREEN" "$NC"
   printf "  %s3)%s  nfqws-keenetic-web\n" "$GREEN" "$NC"
+  printf "  %s4)%s  ${LBL_INSTALL_DIRECT}\n" "$GREEN" "$NC"
   printf "  %s0)%s  ${LBL_BACK_ITEM}\n" "$DIM" "$NC"
   ask "${LBL_YOUR_CHOICE} [0]: "
   read_menu choice
@@ -1617,6 +1743,7 @@ menu_install_nfqws() {
     1) install_nfqws1 ;;
     2) install_nfqws2 ;;
     3) install_web ;;
+    4) menu_install_ipk_direct ;;
     0|"") return ;;
     *) warn "${LBL_INVALID}" ;;
   esac
@@ -3125,15 +3252,53 @@ EOF
   echo
   printf '%s\n' "${BOLD}Привязки доменов (dnsmasq):${NC}"
   any=0
-  local d p
-  while IFS='|' read -r d p; do
-    [ -n "$d" ] || continue
-    any=1
-    printf '  %s%-40s%s %s➔ 127.0.0.1#%s%s\n' "$CYAN" "$d" "$NC" "$DIM" "$p" "$NC"
-  done <<EOF
-$(owrt_dns_routes)
+  local d p all_routes="" total=0 shown=0
+  all_routes=$(owrt_dns_routes)
+  if [ -n "$all_routes" ]; then
+    total=$(printf '%s\n' "$all_routes" | grep -c '|')
+  fi
+  if [ "$total" -gt 0 ]; then
+    while IFS='|' read -r d p; do
+      [ -n "$d" ] || continue
+      shown=$((shown + 1))
+      if [ "$shown" -le 10 ]; then
+        printf '  %s%-40s%s %s➔ 127.0.0.1#%s%s\n' "$CYAN" "$d" "$NC" "$DIM" "$p" "$NC"
+      fi
+    done <<EOF
+$all_routes
 EOF
-  [ "$any" -eq 0 ] && printf '  %s— привязок нет —%s\n' "$DIM" "$NC"
+    if [ "$total" -gt 10 ]; then
+      printf '  %s... и ещё %s домен(ов) (всего %s)%s\n' "$DIM" "$((total - 10))" "$total" "$NC"
+    fi
+  else
+    printf '  %s— привязок нет —%s\n' "$DIM" "$NC"
+  fi
+}
+
+# Получить порт инстанса по URI или создать новый
+owrt_doh_get_or_add_port() {
+  local target_uri="$1" id port uri
+  while IFS='|' read -r id port uri; do
+    [ -n "$id" ] || continue
+    if [ "$uri" = "$target_uri" ]; then
+      echo "$port"
+      return 0
+    fi
+  done <<EOF
+$(hdp_instances)
+EOF
+  if owrt_doh_add "$target_uri" >/dev/null 2>&1; then
+    while IFS='|' read -r id port uri; do
+      [ -n "$id" ] || continue
+      if [ "$uri" = "$target_uri" ]; then
+        echo "$port"
+        return 0
+      fi
+    done <<EOF
+$(hdp_instances)
+EOF
+  fi
+  return 1
 }
 
 owrt_doh_add() {
@@ -3171,11 +3336,10 @@ EOF
   info "Сервер добавлен: $uri ➔ 127.0.0.1#$port"
 }
 
-owrt_bind_domain_menu() {
-  if ! hdp_ensure; then return 1; fi
-  local n=0 ports="" id port uri pick doms d
+owrt_pick_doh_port() {
+  local n=0 ports="" id port uri pick
   echo
-  printf '%s\n' "${BOLD}К какому DoH-серверу привязать домен:${NC}"
+  printf '%s\n' "${BOLD}Выберите DoH-сервер:${NC}"
   while IFS='|' read -r id port uri; do
     [ -n "$id" ] || continue
     n=$((n + 1))
@@ -3184,53 +3348,219 @@ owrt_bind_domain_menu() {
   done <<EOF
 $(hdp_instances)
 EOF
-  [ "$n" -eq 0 ] && { warn "Сначала добавьте DoH-сервер (пункт 1)."; return 0; }
+  if [ "$n" -eq 0 ]; then
+    warn "Настроенных DoH-серверов нет. Сначала добавьте сервер (пункт 1)."
+    return 1
+  fi
   echo " 0) Отмена"
   ask "${LBL_YOUR_CHOICE} [0]: "
   read -r pick
-  case "$pick" in 0|"") return 0 ;; esac
-  case "$pick" in
-    *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;;
-  esac
-  [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ] || { warn "${LBL_INVALID}"; return 0; }
-  port=$(printf '%s\n' $ports | awk -v n="$pick" 'NR == n')
-  ask "Домены через запятую (напр. instagram.com,cdninstagram.com): "
-  read -r doms
-  [ -z "$doms" ] && return 0
+  case "$pick" in 0|"") return 1 ;; esac
+  case "$pick" in *[!0-9]*) warn "${LBL_INVALID}"; return 1 ;; esac
+  if [ "$pick" -ge 1 ] && [ "$pick" -le "$n" ]; then
+    printf '%s\n' $ports | awk -v n="$pick" 'NR == n'
+    return 0
+  fi
+  warn "${LBL_INVALID}"
+  return 1
+}
+
+_fetch_geohide_domains() {
+  local cache_dir="/etc/nfqws-menu"
+  if [ -f "./domains_geohide" ]; then
+    awk '!/^[[:space:]]*(#|$)/ { print $1 }' "./domains_geohide"
+    return 0
+  fi
+  if [ -f "${cache_dir}/domains_geohide" ]; then
+    awk '!/^[[:space:]]*(#|$)/ { print $1 }' "${cache_dir}/domains_geohide"
+    return 0
+  fi
+  local tmp="/tmp/domains_geohide-$$.txt"
+  if download_file "${RAW_BASE}/domains_geohide" "$tmp"; then
+    mkdir -p "$cache_dir" 2>/dev/null || true
+    cp -f "$tmp" "${cache_dir}/domains_geohide" 2>/dev/null || true
+    awk '!/^[[:space:]]*(#|$)/ { print $1 }' "$tmp"
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+owrt_bind_domains_to_port() {
+  local doms="$1" port="$2" d count=0 cur_routes
+  [ -n "$doms" ] && [ -n "$port" ] || return 1
   if ! uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
     uci add dhcp dnsmasq >/dev/null
   fi
-  for d in $(echo "$doms" | tr ',;' '  '); do
+  cur_routes=$(owrt_dns_routes)
+  for d in $doms; do
     [ -n "$d" ] || continue
-    if uci add_list "dhcp.@dnsmasq[0].server=/$d/127.0.0.1#$port"; then
-      info "$d ➔ 127.0.0.1#$port"
-    else
-      warn "не удалось: $d"
+    case "$d" in '#'*|'//'*) continue ;; esac
+    # Если уже привязан к этому же порту — пропускаем
+    case "$cur_routes" in
+      *"${d}|${port}"*) continue ;;
+    esac
+    # Если был привязан к другому порту — удаляем старую привязку без reload
+    case "$cur_routes" in
+      *"${d}|"*) owrt_route_del "$d" 1 >/dev/null 2>&1 || true ;;
+    esac
+    if uci -q add_list "dhcp.@dnsmasq[0].server=/$d/127.0.0.1#$port"; then
+      count=$((count + 1))
     fi
   done
-  uci commit dhcp
-  reload_dns_service
+  if [ "$count" -gt 0 ]; then
+    uci commit dhcp
+    reload_dns_service
+    info "Привязано доменов: $count ➔ 127.0.0.1#$port"
+  else
+    info "Все выбранные домены уже привязаны к 127.0.0.1#$port (без изменений)."
+  fi
+  return 0
+}
+
+owrt_bind_domain_menu() {
+  if ! hdp_ensure; then return 1; fi
+  local pchoice doms="" rec_uri="" rec_name=""
+
+  echo
+  printf '%s\n' "${BOLD}Привязка доменов к DoH-серверу (dnsmasq):${NC}"
+  echo "  1) Instagram & CDN (instagram.com, cdninstagram.com...)"
+  echo "  2) Twitch (gql.twitch.tv, usher.ttvnw.net — реклама/лаги)"
+  echo "  3) Supercell / Brawl Stars (brawlstars, clashofclans, supercell...)"
+  echo "  4) Rutor & NTC.party (rutor.is, ntc.party)"
+  echo "  5) Discord (discord.com, discord.media, discord.gg...)"
+  echo "  6) GeoHide (350+ сервисов с гео-блокировкой РФ: AI Studio, Claude, Cursor...)"
+  echo "  7) Ввести свой домен(ы) вручную"
+  echo "  0) Отмена"
+  echo
+  ask "${LBL_YOUR_CHOICE} [0]: "
+  read -r pchoice
+
+  case "$pchoice" in
+    0|"") return 0 ;;
+    1)
+      doms="instagram.com cdninstagram.com igcdn.com ig.me"
+      rec_name="CleanBrowsing Security"
+      rec_uri="https://doh.cleanbrowsing.org/doh/security-filter/"
+      ;;
+    2)
+      doms="gql.twitch.tv usher.ttvnw.net"
+      rec_name="Xbox-DNS"
+      rec_uri="https://xbox-dns.ru/dns-query"
+      ;;
+    3)
+      doms="supercell.com supercellid.com brawlstarsgame.com clashofclans.com clashroyaleapp.com supercell.helpshift.com"
+      rec_name="NullsProxy"
+      rec_uri="https://dns.nullsproxy.com/dns-query"
+      ;;
+    4)
+      doms="rutor.is rutor.info ntc.party"
+      rec_name="Malw Link"
+      rec_uri="https://dns.malw.link/dns-query"
+      ;;
+    5)
+      doms="discord.com discordapp.com discordapp.net discord.gg discord.media discordcdn.com"
+      rec_name="Google DoH"
+      rec_uri="https://dns.google/dns-query"
+      ;;
+    6)
+      info "Загрузка списка GeoHide (350+ доменов)..."
+      doms=$(_fetch_geohide_domains)
+      if [ -z "$doms" ]; then
+        error "Не удалось загрузить список GeoHide."
+        return 1
+      fi
+      rec_name="Geo Hide"
+      rec_uri="https://dns.geohide.ru/dns-query"
+      ;;
+    7)
+      ask "Домены через запятую или пробел (напр. example.com,cdn.example.com): "
+      read -r doms
+      doms=$(echo "$doms" | tr ',;' '  ')
+      [ -z "$doms" ] && return 0
+      ;;
+    *)
+      warn "${LBL_INVALID}"
+      return 0
+      ;;
+  esac
+
+  local port="" target_choice
+  if [ -n "$rec_uri" ]; then
+    echo
+    printf '%s\n' "${BOLD}К какому DoH-серверу привязать:${NC}"
+    printf '  1) Рекомендуемый: %s%s%s %s(%s)%s\n' "$GREEN" "$rec_name" "$NC" "$DIM" "$rec_uri" "$NC"
+    echo "  2) Выбрать из других настроенных DoH-серверов"
+    echo "  0) Отмена"
+    ask "${LBL_YOUR_CHOICE} [1]: "
+    read -r target_choice
+    case "$target_choice" in
+      0) return 0 ;;
+      2) port=$(owrt_pick_doh_port) ;;
+      1|"")
+        port=$(owrt_doh_get_or_add_port "$rec_uri")
+        [ -n "$port" ] || { error "Не удалось добавить или получить порт для $rec_name."; return 1; }
+        ;;
+      *) warn "${LBL_INVALID}"; return 0 ;;
+    esac
+  else
+    port=$(owrt_pick_doh_port)
+  fi
+
+  [ -n "$port" ] || return 0
+  owrt_bind_domains_to_port "$doms" "$port"
 }
 
 owrt_unbind_menu() {
-  local n=0 doms="" d p pick
+  local n=0 doms="" d p pick all_routes total=0 shown=0
+  all_routes=$(owrt_dns_routes)
+  [ -z "$all_routes" ] && { info "Привязок нет."; return 0; }
+  total=$(printf '%s\n' "$all_routes" | grep -c '|')
+
   echo
   printf '%s\n' "${BOLD}Привязки доменов:${NC}"
   while IFS='|' read -r d p; do
     [ -n "$d" ] || continue
     n=$((n + 1))
-    printf ' %s) %s %s➔ 127.0.0.1#%s%s\n' "$n" "$d" "$DIM" "$p" "$NC"
+    shown=$((shown + 1))
+    if [ "$shown" -le 20 ]; then
+      printf ' %2s) %-35s %s➔ 127.0.0.1#%s%s\n' "$n" "$d" "$DIM" "$p" "$NC"
+    fi
     doms="$doms $d"
   done <<EOF
-$(owrt_dns_routes)
+$all_routes
 EOF
-  [ "$n" -eq 0 ] && { info "Привязок нет."; return 0; }
-  echo " a) Удалить все"
+  if [ "$total" -gt 20 ]; then
+    printf '  %s... и ещё %s домен(ов) (всего %s)%s\n' "$DIM" "$((total - 20))" "$total" "$NC"
+  fi
+  echo " a) Удалить все привязки"
+  echo " g) Удалить только привязки GeoHide"
   echo " 0) Отмена"
   ask "${LBL_YOUR_CHOICE} [0]: "
   read -r pick
   case "$pick" in
     a|A) owrt_route_del_all ;;
+    g|G)
+      local gdoms
+      gdoms=$(_fetch_geohide_domains)
+      if [ -n "$gdoms" ]; then
+        info "Удаление записей GeoHide из dnsmasq..."
+        local count=0
+        for d in $gdoms; do
+          owrt_route_del "$d" 1 >/dev/null 2>&1 && count=$((count + 1)) || true
+        done
+        if [ "$count" -gt 0 ]; then
+          uci commit dhcp
+          reload_dns_service
+          info "Удалено привязок GeoHide: $count"
+        else
+          info "Привязок из списка GeoHide не найдено."
+        fi
+      else
+        warn "Список GeoHide пуст или недоступен."
+      fi
+      ;;
     0|"") return 0 ;;
     *)
       case "$pick" in *[!0-9]*) warn "${LBL_INVALID}"; return 0 ;; esac
@@ -3242,8 +3572,8 @@ EOF
 }
 
 owrt_route_del() {
-  # $1 = домен; del_list требует точного значения — удаляем перечитыванием списка
-  local list r d removed=0
+  # $1 = домен; $2 = nocommit (опционально: 1 = без commit/reload)
+  local list r d removed=0 nocommit="${2:-0}"
   list=$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null) || return 0
   for r in $list; do
     d=${r#/}
@@ -3251,10 +3581,13 @@ owrt_route_del() {
     [ "$d" = "$1" ] || continue
     uci -q del_list "dhcp.@dnsmasq[0].server=$r" && removed=$((removed + 1))
   done
-  [ "$removed" -eq 0 ] && { info "Привязка $1 не найдена."; return 0; }
-  uci commit dhcp
-  reload_dns_service
-  info "Привязка удалена: $1"
+  [ "$removed" -eq 0 ] && return 1
+  if [ "$nocommit" != "1" ]; then
+    uci commit dhcp
+    reload_dns_service
+    info "Привязка удалена: $1"
+  fi
+  return 0
 }
 
 owrt_route_del_all() {
@@ -5473,11 +5806,235 @@ service_upx_compress() {
   info "Готово."
 }
 
+# ---------------------------------------------------------------------------
+# Зеркала репозиториев OpenWrt (opkg / apk)
+# ---------------------------------------------------------------------------
+mirror_get_repo_files() {
+  local f files=""
+  if [ "$(pkg_backend)" = "apk" ]; then
+    [ -f /etc/apk/repositories ] && files="/etc/apk/repositories"
+    if [ -d "$APK_REPO_DIR" ]; then
+      for f in "$APK_REPO_DIR"/*.list; do
+        [ -f "$f" ] && files="${files:+${files} }$f"
+      done
+    fi
+  else
+    [ -f "$OPKG_CONF_DIR/distfeeds.conf" ] && files="$OPKG_CONF_DIR/distfeeds.conf"
+    [ -f "$OPKG_CONF_DIR/customfeeds.conf" ] && files="${files:+${files} }$OPKG_CONF_DIR/customfeeds.conf"
+    [ -f "$OPKG_CONF_DIR/opkg.conf" ] && files="${files:+${files} }$OPKG_CONF_DIR/opkg.conf"
+    if [ -d "$OPKG_CONF_DIR" ]; then
+      for f in "$OPKG_CONF_DIR"/*.conf; do
+        [ -f "$f" ] || continue
+        case "$f" in
+          */distfeeds.conf|*/customfeeds.conf|*/opkg.conf) ;;
+          *) files="${files:+${files} }$f" ;;
+        esac
+      done
+    fi
+  fi
+  echo "$files"
+}
+
+mirror_get_current() {
+  local f cur=""
+  for f in $(mirror_get_repo_files); do
+    [ -f "$f" ] || continue
+    cur=$(awk '
+      {
+        for (i = 1; i <= NF; i++) {
+          if ($i ~ /^https?:\/\//) {
+            u = $i
+            idx = index(u, "/releases")
+            if (idx == 0) idx = index(u, "/snapshots")
+            if (idx > 0) {
+              print substr(u, 1, idx - 1)
+              exit
+            }
+          }
+        }
+      }
+    ' "$f" 2>/dev/null)
+    if [ -n "$cur" ]; then
+      echo "$cur"
+      return 0
+    fi
+  done
+  echo "https://downloads.openwrt.org"
+}
+
+mirror_apply() {
+  local new="$1" cur files f count=0 yr
+  [ -n "$new" ] || return 1
+  new="${new%/}"
+  case "$new" in
+    http://*|https://*) ;;
+    *)
+      error "Некорректный URL зеркала (требуется префикс http:// или https://): $new"
+      return 1
+      ;;
+  esac
+
+  cur=$(mirror_get_current)
+  if [ "$cur" = "$new" ]; then
+    info "Выбранное зеркало уже установлено: $cur"
+    if confirm_yes "Проверить доступность репозиториев (pkg_update)?"; then
+      pkg_update || warn "Ошибка при обновлении списка пакетов."
+    fi
+    return 0
+  fi
+
+  files=$(mirror_get_repo_files)
+  if [ -z "$files" ]; then
+    error "Конфигурационные файлы репозиториев не найдены."
+    return 1
+  fi
+
+  yr=$(date +%Y 2>/dev/null || echo 1970)
+  if [ "$yr" -lt 2024 ] && [ "${new#https://}" != "$new" ]; then
+    warn "Внимание: системные часы роутера ($(date)) могут быть не синхронизированы!"
+    warn "HTTPS-запросы могут завершаться ошибкой проверки SSL-сертификатов (NTP)."
+  fi
+
+  info "Переключение зеркала репозиториев OpenWrt:"
+  info "  Текущее: $cur"
+  info "  Новое:   $new"
+
+  for f in $files; do
+    [ -f "$f" ] || continue
+    if grep -qF "$cur" "$f" 2>/dev/null; then
+      [ -f "${f}.orig" ] || cp -p "$f" "${f}.orig"
+      cp -p "$f" "${f}.bak"
+      sed -i "s|${cur}|${new}|g" "$f"
+      count=$((count + 1))
+      info "  Обновлён файл: $f"
+    fi
+  done
+
+  if [ "$count" -eq 0 ]; then
+    warn "Ни в одном файле репозиториев не обнаружено вхождений '$cur'."
+    return 1
+  fi
+
+  info "Файлы обновлены ($count). Проверяем доступность репозиториев (pkg_update)..."
+  if pkg_update; then
+    info "Успешно! Репозитории доступны через зеркало: $new"
+    refresh_opkg_cache
+  else
+    error "Не удалось обновить список пакетов через зеркало: $new"
+    if confirm_yes "Откатить изменения назад на $cur?"; then
+      for f in $files; do
+        if [ -f "${f}.bak" ]; then
+          mv -f "${f}.bak" "$f"
+        fi
+      done
+      pkg_update >/dev/null 2>&1 || true
+      info "Изменения откатаны."
+    else
+      warn "Изменения сохранены. При необходимости выберите другое зеркало или восстановите оригинал."
+    fi
+  fi
+}
+
+mirror_toggle_ssl() {
+  local cur new
+  cur=$(mirror_get_current)
+  case "$cur" in
+    https://*)
+      new="http://${cur#https://}"
+      info "Переключение с HTTPS на HTTP: $new"
+      ;;
+    http://*)
+      new="https://${cur#http://}"
+      info "Переключение с HTTP на HTTPS: $new"
+      ;;
+    *)
+      error "Не удалось определить протокол для $cur"
+      return 1
+      ;;
+  esac
+  mirror_apply "$new"
+}
+
+mirror_restore_original() {
+  local f files restored=0
+  files=$(mirror_get_repo_files)
+  for f in $files; do
+    if [ -f "${f}.orig" ]; then
+      cp -f "${f}.orig" "$f"
+      restored=$((restored + 1))
+      info "  Восстановлен: $f (из ${f}.orig)"
+    fi
+  done
+  if [ "$restored" -gt 0 ]; then
+    info "Оригинальные конфигурационные файлы восстановлены ($restored)."
+    pkg_update || warn "pkg_update завершился с предупреждением."
+    refresh_opkg_cache
+  else
+    info "Резервные копии .orig не найдены. Устанавливаем официальный upstream: https://downloads.openwrt.org"
+    mirror_apply "https://downloads.openwrt.org"
+  fi
+}
+
+service_mirror_menu() {
+  local cur mchoice custom_url
+  while true; do
+    cur=$(mirror_get_current)
+    echo
+    printf '%s\n' "${BOLD}${CYAN}[::]  ${LBL_S2}${NC}"
+    echo "      Текущий источник: ${YELLOW}${cur}${NC}"
+    echo
+    echo "      1. Официальный (downloads.openwrt.org)"
+    echo "      2. Alibaba Cloud (mirrors.aliyun.com/openwrt — быстрый CDN в РФ)"
+    echo "      3. Tsinghua TUNA (mirrors.tuna.tsinghua.edu.cn/openwrt)"
+    echo "      4. USTC (mirrors.ustc.edu.cn/openwrt)"
+    echo "      5. Accum.se (mirror.accum.se/mirror/openwrt.org — Швеция/EU)"
+    echo "      6. Ввести свой URL зеркала вручную"
+    echo "      7. Проверить доступность репозиториев (pkg_update)"
+    echo "      8. Переключить протокол (HTTPS ↔ HTTP)"
+    echo "      9. Восстановить оригинальные настройки (.orig)"
+    echo "      0. ${LBL_BACK_ITEM}"
+    echo
+    ask "${LBL_YOUR_CHOICE} [0]: "
+    read -r mchoice
+    case "$mchoice" in
+      1) mirror_apply "https://downloads.openwrt.org" ;;
+      2) mirror_apply "https://mirrors.aliyun.com/openwrt" ;;
+      3) mirror_apply "https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
+      4) mirror_apply "https://mirrors.ustc.edu.cn/openwrt" ;;
+      5) mirror_apply "https://mirror.accum.se/mirror/openwrt.org" ;;
+      6)
+        echo
+        ask "Введите базовый URL зеркала (например: https://mirrors.aliyun.com/openwrt): "
+        read -r custom_url
+        if [ -n "$custom_url" ]; then
+          mirror_apply "$custom_url"
+        else
+          warn "URL не указан."
+        fi
+        ;;
+      7)
+        echo
+        info "Проверка доступности репозиториев через $cur..."
+        if pkg_update; then
+          info "Репозитории успешно обновлены!"
+        else
+          error "Ошибка при обновлении репозиториев."
+        fi
+        ;;
+      8) mirror_toggle_ssl ;;
+      9) mirror_restore_original ;;
+      0|"") return 0 ;;
+      *) warn "Неверный выбор." ;;
+    esac
+  done
+}
+
 menu_service() {
   while true; do
     echo
     printf '%s\n' "${BOLD}${CYAN}[::]  ${LBL_REMOVE} (S)${NC}"
     echo "      1. $LBL_S1"
+    echo "      2. $LBL_S2"
     echo "      U. $LBL_U"
     echo "      0. ${LBL_BACK_ITEM}"
     echo
@@ -5485,6 +6042,7 @@ menu_service() {
     read -r schoice
     case "$schoice" in
       1) service_upx_compress || true ;;
+      2) service_mirror_menu || true ;;
       U|u) opkg_upgrade_all || true ;;
       0|"") return 0 ;;
       *) warn "Неверный выбор." ;;

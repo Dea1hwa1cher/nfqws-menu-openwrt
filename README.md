@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.5**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.6**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -376,6 +376,23 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.1.6
+
+- **Доменные пресеты DoH и GeoHide (пункт 9 / 6)**:
+  - Добавлено меню быстрого выбора популярных заблокированных сервисов при точечной привязке доменов к DoH (`owrt_bind_domain_menu`): **Instagram / Meta**, **Twitch**, **Supercell / Brawl Stars**, **Rutor / NTC**, **Discord**, а также полный список **GeoHide** (350+ доменов зарубежных сервисов с геоблоком РФ).
+  - Реализован автоматический парсинг и автосоздание рабочего инстанса `https-dns-proxy` (`owrt_doh_get_or_add_port`), если на роутере ещё не настроен DoH-резолвер.
+  - Оптимизирована пакетная запись доменов через UCI (один атомарный `uci commit` и один перезапуск dnsmasq вместо сотен последовательных коммитов).
+  - Добавлена очистка привязок GeoHide (`g) Удалить только привязки GeoHide`) и защита длинных списков от убегания экрана терминала.
+- **Прямая standalone-установка .ipk / .apk (пункт 1 → 4)**:
+  - Добавлен пункт «Прямая установка .ipk / .apk (обход фида)» в меню установки NFQWS.
+  - Автоматически определяет формат пакетов роутера (`.apk` для OpenWrt 25.x, `.ipk` для OpenWrt ≤ 24.10) и архитектуру.
+  - Скачивает официальные релизные бинарные пакеты `nfqws-keenetic`, `nfqws2-keenetic` и `nfqws-keenetic-web` напрямую с GitHub Releases через CDN-зеркала (`ghproxy.net`, jsDelivr) в обход недоступных или сломанных локальных фидов opkg/apk.
+- **Менеджер зеркал OpenWrt в сервисном меню (пункт S → 2)**:
+  - Автоматическое определение текущего источника дистрибутива в `/etc/opkg/distfeeds.conf`, `/etc/opkg/*.conf` или `/etc/apk/repositories`.
+  - Быстрое переключение на проверенные высокоскоростные зеркала: **Alibaba Cloud** (`mirrors.aliyun.com/openwrt`), **Tsinghua TUNA** (`mirrors.tuna.tsinghua.edu.cn/openwrt`), **USTC** (`mirrors.ustc.edu.cn/openwrt`), **Accum.se** (`mirror.accum.se/mirror/openwrt.org`), официальный upstream (`downloads.openwrt.org`) или произвольный пользовательский URL.
+  - Переключатель протоколов **HTTPS ↔ HTTP** для обхода ошибок верификации сертификатов при отсутствии `libustream-openssl` или сбитых системных часах (NTP).
+  - Безопасное резервное копирование (`.orig`, `.bak`) и автоматический откат при неудачной проверке доступности репозиториев (`pkg_update`).
 
 ### 0.1.5
 
