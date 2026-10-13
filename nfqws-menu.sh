@@ -1124,6 +1124,7 @@ refresh_opkg_cache() {
   fi
   local status="$STATUS_FILE"
   [ -r "$status" ] || status="/usr/lib/opkg/status"
+  [ -r "$status" ] || status="/var/lib/opkg/status"
   if [ ! -r "$status" ]; then
     OPKG_INSTALLED_CACHE=""
     return 0
@@ -1198,8 +1199,10 @@ port_is_open() {
     netstat -lnt 2>/dev/null | grep -qE "[.:]${port}[[:space:]]" && ok=0
   elif command -v ss >/dev/null 2>&1; then
     ss -lnt 2>/dev/null | grep -qE "[.:]${port}[[:space:]]" && ok=0
-  elif [ -r /proc/net/tcp ]; then
-    grep -q ":$(printf '%04X' "$port") " /proc/net/tcp 2>/dev/null && ok=0
+  elif [ -r /proc/net/tcp ] || [ -r /proc/net/tcp6 ]; then
+    hex_port=$(printf '%04X' "$port")
+    { grep -q ":${hex_port} " /proc/net/tcp 2>/dev/null || \
+      grep -q ":${hex_port} " /proc/net/tcp6 2>/dev/null; } && ok=0
   fi
   if [ "$port" = "90" ]; then
     if [ "$ok" -eq 0 ]; then PORT90_CACHE=1; else PORT90_CACHE=0; fi
@@ -1521,11 +1524,31 @@ nfqws_conf_path() {
   esac
 }
 
-# OpenWrt: procd-сервисы nfqws-keenetic / nfqws2-keenetic
+# OpenWrt: procd-сервисы nfqws-keenetic / nfqws2-keenetic (или nfqws / nfqws2)
 nfqws_init_path() {
   case "$1" in
-    1) echo "${INIT_BASE_DIR}/nfqws-keenetic" ;;
-    2) echo "${INIT_BASE_DIR}/nfqws2-keenetic" ;;
+    1)
+      if [ -x "${INIT_BASE_DIR}/nfqws" ]; then
+        echo "${INIT_BASE_DIR}/nfqws"
+      elif [ -x "${INIT_BASE_DIR}/nfqws-keenetic" ]; then
+        echo "${INIT_BASE_DIR}/nfqws-keenetic"
+      elif [ -f "${INIT_BASE_DIR}/nfqws" ]; then
+        echo "${INIT_BASE_DIR}/nfqws"
+      else
+        echo "${INIT_BASE_DIR}/nfqws-keenetic"
+      fi
+      ;;
+    2)
+      if [ -x "${INIT_BASE_DIR}/nfqws2" ]; then
+        echo "${INIT_BASE_DIR}/nfqws2"
+      elif [ -x "${INIT_BASE_DIR}/nfqws2-keenetic" ]; then
+        echo "${INIT_BASE_DIR}/nfqws2-keenetic"
+      elif [ -f "${INIT_BASE_DIR}/nfqws2" ]; then
+        echo "${INIT_BASE_DIR}/nfqws2"
+      else
+        echo "${INIT_BASE_DIR}/nfqws2-keenetic"
+      fi
+      ;;
   esac
 }
 
@@ -1542,7 +1565,7 @@ nfqws_lists_dir() {
 install_deps() {
   info "Установка зависимостей..."
   pkg_update
-  pkg_install ca-certificates wget-ssl 2>/dev/null || true
+  pkg_install ca-certificates wget-ssl curl 2>/dev/null || true
   pkg_remove wget-nossl 2>/dev/null || true
 }
 
@@ -3973,7 +3996,8 @@ EOF
 # 99. Обновить скрипт
 # ---------------------------------------------------------------------------
 extract_script_version() {
-  grep -E '^SCRIPT_VERSION=' "$1" 2>/dev/null | head -1 | \
+  local src="${1:--}"
+  grep -E '^SCRIPT_VERSION=' "$src" 2>/dev/null | head -1 | \
     sed -n 's/^SCRIPT_VERSION="\([^"]*\)".*/\1/p'
 }
 
@@ -4829,13 +4853,8 @@ menu_magitrickle() {
   else
     info "Пакет не установлен — установка..."
     confirm_yes "Добавить репозиторий MagiTrickle и установить пакет?" || { info "Отменено."; return 0; }
-    info "Добавление репозитория..."
-    if command -v wget >/dev/null 2>&1; then
-      wget -qO- http://bin.magitrickle.dev/packages/add_repo.sh | sh || return 1
-    elif command -v curl >/dev/null 2>&1; then
-      curl -fsSL http://bin.magitrickle.dev/packages/add_repo.sh | sh || return 1
-    else
-      error "Нужны wget или curl."
+    if ! run_remote_sh "http://bin.magitrickle.dev/packages/add_repo.sh" 500; then
+      error "Не удалось выполнить установщик репозитория MagiTrickle."
       return 1
     fi
     pkg_update
@@ -6066,18 +6085,29 @@ UPD_CACHE="${CACHE_DIR}/updates.cache"
 # Версия скрипта меню: первые 2 КБ файла через зеркала — 200 КБ тянуть незачем.
 upd_menu_version() {
   local url alt tmp ver
-  command -v curl >/dev/null 2>&1 || return 1
   url="${RAW_BASE}/nfqws-menu.sh"
   tmp="/tmp/nfqws-menu-upd-$$"
-  for alt in $(github_alt_urls "$url"); do
-    curl -fsS -m 8 -r 0-2047 "$alt" -o "$tmp" 2>/dev/null || continue
-    ver=$(extract_script_version "$tmp") || ver=""
-    if [ -n "$ver" ]; then
-      rm -f "$tmp"
-      printf '%s' "$ver"
-      return 0
-    fi
-  done
+  if command -v curl >/dev/null 2>&1; then
+    for alt in $(github_alt_urls "$url"); do
+      curl -fsS -m 8 -r 0-2047 "$alt" -o "$tmp" 2>/dev/null || continue
+      ver=$(extract_script_version "$tmp") || ver=""
+      if [ -n "$ver" ]; then
+        rm -f "$tmp"
+        printf '%s' "$ver"
+        return 0
+      fi
+    done
+  else
+    # Fallback если curl не установлен: читаем заголовки скрипта через HTTP-стек меню
+    for alt in $(github_alt_urls "$url"); do
+      ver=$(_http_get_stdout "$alt" 2>/dev/null | head -n 30 | extract_script_version -) || ver=""
+      if [ -n "$ver" ]; then
+        rm -f "$tmp"
+        printf '%s' "$ver"
+        return 0
+      fi
+    done
+  fi
   rm -f "$tmp"
   return 1
 }
