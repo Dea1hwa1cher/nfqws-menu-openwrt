@@ -8,7 +8,7 @@
 
 Репозиторий также служит хранилищем готовых **стратегий** обхода DPI, **blobs** и **lists**.
 
-- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.4**)
+- Скрипт: [`nfqws-menu.sh`](nfqws-menu.sh) (текущая версия **0.1.5**)
 - Стратегии: [`strategies/`](strategies/)
 - Hosts: [`hosts`](hosts)
 - Контрольные суммы: [`SHA256SUMS`](SHA256SUMS), [`strategies/blobs/SHA256SUMS`](strategies/blobs/SHA256SUMS)
@@ -289,7 +289,7 @@ menu        # /usr/bin/menu → /usr/bin/nfqws-menu.sh
 
 Инструмент для анализа цензуры трафика в России: обнаруживает и классифицирует блокировки сайтов, хостингов и CDN (TCP16–20 блокировки), а также подмену DNS-запросов провайдером.
 
-Актуальная версия [dpi-detector](https://github.com/Runnin4ik/dpi-detector) (ветка `rust`). Бинарник сохраняется в `/usr/local/bin` (OpenWrt персистентный overlay).
+Актуальная версия [dpi-detector](https://github.com/Runnin4ik/dpi-detector) (ветка `rust`). Бинарник сохраняется в `/usr/bin/dpi-detector`.
 
 Если бинарник уже есть — сразу запускает его.
 
@@ -340,7 +340,7 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 
 | Пункт | Действие |
 | --- | --- |
-| 1 | **Сжать bin/sbin (UPX)** — `upx --lzma --best` для исполняемых файлов |
+| 1 | **Сжать бинарники утилит (UPX)** — `upx --lzma --best` для установленных бинарников (`nfqws`, `nfqws2`, `tg-ws-proxy-rs`, `dpi-detector`, `telemt`, `magitrickle`, `awg`) в `/usr/bin` и `/usr/sbin` |
 | U | **Обновить все пакеты** — `opkg update && opkg upgrade` / `apk update && apk upgrade` (также клавиша **U** из главного меню) |
 
 ### 77. Change language
@@ -354,7 +354,7 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ```
 Удаление:
   [N] nfqws2-keenetic / nfqws-keenetic-web / awg-openwrt / dpi-detector /
-      tg-ws-proxy-rs / magitrickle
+      tg-ws-proxy-rs / magitrickle / luci-app-telemt
   [a] Удалить все пакеты NFQWS
   [b] Удалить резервные копии (.bak.* / *-opkg)
   [0] Назад
@@ -365,6 +365,7 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 - **dpi-detector** — `/usr/bin/dpi-detector`
 - **tg-ws-proxy-rs** — бинарь, init, конфиги
 - **magitrickle** — удаление пакета + запрос на удаление файла репозитория
+- **luci-app-telemt** — удаление веб-интерфейса LuCI и ядра `telemt` + запрос на удаление `/etc/config/telemt`
 - **a)** — все пакеты NFQWS + dpi-detector
 - **b)** — `*.bak.*`, `*.conf-opkg`, `*.list-opkg` в каталогах конфигов nfqws
 
@@ -375,6 +376,19 @@ MTProto-прокси на C с веб-интерфейсом LuCI ([Medvedolog/l
 ---
 
 ## Changelog
+
+### 0.1.5
+
+- **Исправление функциональных багов**:
+  - **П. 7 (Обновление hosts)**: исправлено зависание цикла чтения выбранных секций (`while read` перехватывал интерактивный `stdin` у `confirm_yes`), исправлено удаление блока записей (`88`), которое раньше не срабатывало при отсутствии секций и выводило неверный счётчик доменов
+  - **Детекция запущенных процессов**: `proc_running` и статус главного меню переведены на точное совпадение имени бинарника по границам токенов, исключено ложное срабатывание статуса `nfqws` (v1) от запущенного `nfqws-menu.sh` или `nfqws2`
+  - **П. S → 1 (UPX)**: `service_upx_compress` переведён с несуществующего `/opt/*` и неподдерживаемого в BusyBox флага `find -executable` на безопасное сжатие установленных пользовательских бинарников в `/usr/bin` и `/usr/sbin`
+- **Глубокая очистка мёртвого кода (~540 строк)**:
+  - Удалены недостижимые на OpenWrt функции ручной распаковки Entware `.ipk` (`install_ipk_from_repo`, `menu_install_ipk_direct` и связанные хелперы)
+  - Удалён скрытый legacy-пункт `opera-proxy` (Entware-only) и остаточные ветки `/opt/etc/...` во всех модулях
+- **Устранение дублирования и рефакторинг**:
+  - Вынесены общие хелперы `pkg_install_file` и `get_lan_ip`, дедуплицированы `tg_ws_proxy_rs_target`, `upd_legend`, `load_dot_doh_strategy` и `menu_dot_doh`
+  - Вложенные функции в `update_ipset_list` и `update_rkn_list` вынесены на верхний уровень (`_ipset_write_file`, `_ipset_apply_and_restart`, `_rkn_apply_for_ver`)
 
 ### 0.1.4
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # nfqws-menu.sh — интерактивное меню установки/управления
-# nfqws-keenetic / nfqws2-keenetic / nfqws-keenetic-web для OpenWrt и Entware (Keenetic / Netcraze)
+# nfqws-keenetic / nfqws2-keenetic / nfqws-keenetic-web для OpenWrt
 # Форк: https://github.com/Dea1hwa1cher/nfqws-menu-openwrt (адаптация nfqws-menu под OpenWrt)
 # Апстрим: https://github.com/rndnaame/nfqws-menu
 #
@@ -11,7 +11,7 @@
 
 set -e
 
-SCRIPT_VERSION="0.1.4"
+SCRIPT_VERSION="0.1.5"
 
 RAW_BASE="https://raw.githubusercontent.com/Dea1hwa1cher/nfqws-menu-openwrt/main"
 STRATEGIES_API="https://api.github.com/repos/Dea1hwa1cher/nfqws-menu-openwrt/contents/strategies"
@@ -163,15 +163,10 @@ detect_os
 # Язык UI (${CONF_BASE_DIR}/nfqws-menu/nfqws-menu.lang, env NFQWS_MENU_LANG / NFQWS_MENU_UTF8)
 # ---------------------------------------------------------------------------
 UI_LANG_FILE="${CONF_BASE_DIR}/nfqws-menu/nfqws-menu.lang"
-if [ ! -f "$UI_LANG_FILE" ]; then
-  if [ -f "${CONF_BASE_DIR}/nfqws-menu.lang" ]; then
-    mkdir -p "${CONF_BASE_DIR}/nfqws-menu" 2>/dev/null || true
-    mv "${CONF_BASE_DIR}/nfqws-menu.lang" "$UI_LANG_FILE" 2>/dev/null || \
-      cp "${CONF_BASE_DIR}/nfqws-menu.lang" "$UI_LANG_FILE" 2>/dev/null || true
-  elif [ "$ROUTER_OS" = "openwrt" ] && [ -f /opt/etc/nfqws-menu/nfqws-menu.lang ]; then
-    mkdir -p "${CONF_BASE_DIR}/nfqws-menu" 2>/dev/null || true
-    cp /opt/etc/nfqws-menu/nfqws-menu.lang "$UI_LANG_FILE" 2>/dev/null || true
-  fi
+if [ ! -f "$UI_LANG_FILE" ] && [ -f "${CONF_BASE_DIR}/nfqws-menu.lang" ]; then
+  mkdir -p "${CONF_BASE_DIR}/nfqws-menu" 2>/dev/null || true
+  mv "${CONF_BASE_DIR}/nfqws-menu.lang" "$UI_LANG_FILE" 2>/dev/null || \
+    cp "${CONF_BASE_DIR}/nfqws-menu.lang" "$UI_LANG_FILE" 2>/dev/null || true
 fi
 
 ui_detect_default_lang() {
@@ -235,8 +230,6 @@ ui_apply_lang() {
       LBL_YOUR_CHOICE="Ваш выбор"
       LBL_CHOICE="Выбор"
       LBL_INSTALL_TITLE="Установка NFQWS / NFQWS2"
-      LBL_IPK_TITLE="Установка / обновление .ipk (обход DPI)"
-      LBL_IPK_MENU="Установка / обновление .ipk (обход DPI)"
       LBL_IPSET_WARN1="⚠ ОСТОРОЖНО"
       LBL_IPSET_WARN2="Вы собираетесь изменить ipset.list."
       LBL_IPSET_WARN3="Большой список CIDR от Flowseal (33K+) может нагрузить роутер"
@@ -279,8 +272,6 @@ ui_apply_lang() {
       LBL_YOUR_CHOICE="Your choice"
       LBL_CHOICE="Choice"
       LBL_INSTALL_TITLE="Install NFQWS / NFQWS2"
-      LBL_IPK_TITLE="Install / update .ipk (bypass DPI)"
-      LBL_IPK_MENU="Install / update .ipk (bypass DPI)"
       LBL_IPSET_WARN1="⚠ CAUTION"
       LBL_IPSET_WARN2="You are about to change ipset.list."
       LBL_IPSET_WARN3="A large Flowseal CIDR list (33K+) may load the router"
@@ -842,6 +833,20 @@ pkg_install() {
   fi
 }
 
+# Установка локального файла пакета (.ipk / .apk)
+pkg_install_file() {
+  if [ "$(pkg_backend)" = "apk" ]; then
+    apk add --allow-untrusted "$@"
+  else
+    opkg install "$@"
+  fi
+}
+
+# LAN IP роутера для подсказок со ссылками LuCI / веб-интерфейса
+get_lan_ip() {
+  uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>"
+}
+
 pkg_remove() {
   if [ "$(pkg_backend)" = "apk" ]; then
     # apk del не знает --autoremove (зависимости чистит сам) — фильтруем
@@ -857,13 +862,9 @@ pkg_remove() {
   fi
 }
 
-# URL фида nfqws: $ARCH (Entware) или openwrt (нативный фид OpenWrt)
+# URL нативного фида OpenWrt для nfqws
 nfqws_feed_url() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    echo "https://nfqws.github.io/$1/openwrt"
-  else
-    echo "https://nfqws.github.io/$1/$ARCH"
-  fi
+  echo "https://nfqws.github.io/$1/openwrt"
 }
 
 # GPG-ключ нативного фида OpenWrt (opkg проверяет подпись Packages).
@@ -963,16 +964,9 @@ _arch_from_opkg() {
   opkg print-architecture 2>/dev/null | _arch_pick_best
 }
 
-# Чтение opkg.conf (/etc/opkg.conf для OpenWrt или /opt/etc/opkg.conf для Keenetic)
+# Чтение /etc/opkg.conf
 _arch_from_opkg_conf() {
-  local conf="${1:-}" line name from_url=""
-  if [ -z "$conf" ]; then
-    if [ "$ROUTER_OS" = "openwrt" ]; then
-      conf="/etc/opkg.conf"
-    else
-      conf="/opt/etc/opkg.conf"
-    fi
-  fi
+  local conf="${1:-/etc/opkg.conf}" line name from_url=""
   [ -f "$conf" ] || return 0
 
   name=$(grep -E '^[[:space:]]*arch[[:space:]]+' "$conf" 2>/dev/null | _arch_pick_best)
@@ -1067,29 +1061,15 @@ detect_arch() {
     fi
   fi
 
-  # 4) uname -m (mips* не берём на Keenetic — врёт)
+  # 4) uname -m
   if [ -z "$ARCH" ]; then
     um=$(uname -m 2>/dev/null || true)
-    case "$um" in
-      mips|mipsel|mips64|mips64el|"")
-        if [ "$ROUTER_OS" = "openwrt" ]; then
-          cand=$(_arch_normalize "$um")
-          if [ -n "$cand" ]; then
-            ARCH="$cand"
-            ARCH_RAW="$um"
-            ARCH_SOURCE="uname"
-          fi
-        fi
-        ;;
-      *)
-        cand=$(_arch_normalize "$um")
-        if [ -n "$cand" ]; then
-          ARCH="$cand"
-          ARCH_RAW="$um"
-          ARCH_SOURCE="uname"
-        fi
-        ;;
-    esac
+    cand=$(_arch_normalize "$um")
+    if [ -n "$cand" ]; then
+      ARCH="$cand"
+      ARCH_RAW="$um"
+      ARCH_SOURCE="uname"
+    fi
   fi
 
   [ -z "$ARCH_SOURCE" ] && ARCH_SOURCE="none"
@@ -1105,7 +1085,7 @@ detect_arch() {
 need_arch() {
   [ -z "$ARCH" ] && detect_arch
   if [ -z "$ARCH" ]; then
-    error "Нужна архитектура: opkg print-architecture или /opt/etc/opkg.conf (uname/RCI на mipsel врут)."
+    error "Нужна архитектура: проверьте вывод opkg print-architecture / apk --print-arch или /etc/opkg.conf."
     return 1
   fi
   return 0
@@ -1118,8 +1098,7 @@ OPKG_INSTALLED_CACHE=""
 PROC_CACHE=""
 PORT90_CACHE=""
 
-# Список установленных из статуса opkg (Entware: /opt/lib/opkg/status,
-# OpenWrt: /usr/lib/opkg/status) — без вызова opkg, без lock.
+# Список установленных из статуса opkg (/usr/lib/opkg/status) — без вызова opkg, без lock.
 # Только Status «… installed» (не «not-installed» — старые residual-записи).
 # Формат строк: «name - version».
 refresh_opkg_cache() {
@@ -1225,19 +1204,14 @@ port_is_open() {
 }
 
 proc_running() {
-  local name="$1"
-  [ -n "$PROC_CACHE" ] || refresh_proc_cache
-  # substring в кэше ps — без fork (имена сервисов достаточно уникальны)
-  case "$PROC_CACHE" in
-    *"$name"*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-# Целое имя команды: tg-ws-proxy ≠ tg-ws-proxy-rs
-proc_running_exact() {
   local name="$1" line
   [ -n "$PROC_CACHE" ] || refresh_proc_cache
+  # Быстрая отсечка по подстроке без fork, затем проверка целого имени бинарника
+  # (чтобы nfqws не срабатывал на nfqws2 / nfqws-menu.sh, а tg-ws-proxy — на tg-ws-proxy-rs)
+  case "$PROC_CACHE" in
+    *"$name"*) ;;
+    *) return 1 ;;
+  esac
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       *"/$name "*|*"/$name"|*" $name "*|*" $name") return 0 ;;
@@ -1251,11 +1225,9 @@ EOF
 # kind → «запущен?» (по процессу / порту)
 service_is_up() {
   case "$1" in
-    nfqws|nfqws2|magitrickle|telemt) proc_running "$1" ;;
-    # tg-ws-proxy-rs содержит "tg-ws-proxy" подстрокой, поэтому у Go-сборки
-    # совпадение по целому имени команды, а у Rust — по своей строке.
-    tg-ws-proxy)    proc_running_exact "tg-ws-proxy" ;;
-    tg-ws-proxy-rs) proc_running "tg-ws-proxy-rs" ;;
+    nfqws|nfqws2|magitrickle|telemt|tg-ws-proxy|tg-ws-proxy-rs)
+      proc_running "$1"
+      ;;
     web)
       port_is_open 90 || proc_running lighttpd
       ;;
@@ -1292,7 +1264,7 @@ show_installed() {
   service_is_up awg && awg_up=1
 
   # Внешние tool-версии (не из opkg) — до awk
-  if [ -x "${TG_WS_PROXY_RS_BIN:-/opt/bin/tg-ws-proxy-rs}" ]; then
+  if [ -x "${TG_WS_PROXY_RS_BIN:-/usr/bin/tg-ws-proxy-rs}" ]; then
     rs_ver=$(tg_ws_proxy_rs_version 2>/dev/null) || rs_ver="ok"
     extras="${extras}tool|tg-ws-proxy-rs|${rs_ver:-ok}|tg-ws-proxy-rs
 "
@@ -1318,8 +1290,8 @@ show_installed() {
     extras="${extras}tool|amneziawg|${_awg_ver:-ok}|amneziawg
 "
   fi
-  # список S* init (имена сервисов); на OpenWrt сервисы в /etc/init.d без S-префикса
-  if [ "$ROUTER_OS" = "openwrt" ] && [ -d /etc/init.d ]; then
+  # список сервисов в /etc/init.d
+  if [ -d /etc/init.d ]; then
     local f base
     for f in /etc/init.d/nfqws*; do
       [ -f "$f" ] && [ -x "$f" ] || continue
@@ -1329,17 +1301,6 @@ show_installed() {
       case "$base" in
         nfqws-keenetic|nfqws2-keenetic|nfqws-keenetic-web) continue ;;
       esac
-      extras="${extras}init|${base}
-"
-    done
-  elif [ -d /opt/etc/init.d ]; then
-    local f base
-    for f in /opt/etc/init.d/S[0-9][0-9]*; do
-      [ -f "$f" ] && [ -x "$f" ] || continue
-      base=${f##*/}
-      # S99name → name (BusyBox: ${var#S[0-9][0-9]} может не сработать — sed fallback)
-      base=$(printf '%s' "$base" | sed 's/^S[0-9][0-9]//')
-      [ -n "$base" ] || continue
       extras="${extras}init|${base}
 "
     done
@@ -1379,7 +1340,7 @@ show_installed() {
       if (ver_gt(rem, localv)) return U G rem N
       return ""
     }
-    function proc_has(s) { return index(PROC, s) > 0 }
+    function proc_has(s) { return PROC ~ ("(^|[[:space:]/])" s "([[:space:]]|$)") }
 
     BEGIN {
       section = "opkg"
@@ -1556,19 +1517,12 @@ nfqws_conf_path() {
   esac
 }
 
-# OpenWrt: procd-сервисы nfqws-keenetic / nfqws2-keenetic; Entware: S51-скрипты
+# OpenWrt: procd-сервисы nfqws-keenetic / nfqws2-keenetic
 nfqws_init_path() {
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    case "$1" in
-      1) echo "${INIT_BASE_DIR}/nfqws-keenetic" ;;
-      2) echo "${INIT_BASE_DIR}/nfqws2-keenetic" ;;
-    esac
-  else
-    case "$1" in
-      1) echo "${INIT_BASE_DIR}/S51nfqws" ;;
-      2) echo "${INIT_BASE_DIR}/S51nfqws2" ;;
-    esac
-  fi
+  case "$1" in
+    1) echo "${INIT_BASE_DIR}/nfqws-keenetic" ;;
+    2) echo "${INIT_BASE_DIR}/nfqws2-keenetic" ;;
+  esac
 }
 
 nfqws_lists_dir() {
@@ -1599,9 +1553,7 @@ install_nfqws1() {
   need_arch || return 1
   info "Установка nfqws-keenetic (версия 1)..."
   install_deps
-  if [ "$ROUTER_OS" = "openwrt" ] && ! ensure_openwrt_feed_key "nfqws-keenetic"; then
-    return 1
-  fi
+  ensure_openwrt_feed_key "nfqws-keenetic" || return 1
   ensure_opkg_repo "nfqws-keenetic" "$(nfqws_feed_url nfqws-keenetic)"
   pkg_install nfqws-keenetic
   info "nfqws-keenetic установлен."
@@ -1620,34 +1572,11 @@ install_nfqws2() {
     fi
   fi
   install_deps
-  if [ "$ROUTER_OS" = "openwrt" ] && ! ensure_openwrt_feed_key "nfqws2-keenetic"; then
-    return 1
-  fi
+  ensure_openwrt_feed_key "nfqws2-keenetic" || return 1
   ensure_opkg_repo "nfqws2-keenetic" "$(nfqws_feed_url nfqws2-keenetic)"
   pkg_install nfqws2-keenetic
   info "nfqws2-keenetic установлен."
   ask_web_install
-}
-
-# Суффикс архитектуры в имени .ipk
-ipk_arch_suffix() {
-  case "${ARCH:-}" in
-    mipsel)  echo "mipsel-3.4" ;;
-    mips)    echo "mips-3.4" ;;
-    aarch64) echo "aarch64-3.10" ;;
-    x86_64)  echo "x86_64" ;;
-    x86)     echo "x86" ;;
-    *)       echo "${ARCH:-unknown}" ;;
-  esac
-}
-
-ipk_github_repo() {
-  case "$1" in
-    nfqws-keenetic)     echo "nfqws/nfqws-keenetic" ;;
-    nfqws2-keenetic)    echo "nfqws/nfqws2-keenetic" ;;
-    nfqws-keenetic-web) echo "nfqws/nfqws-keenetic-web" ;;
-    *) return 1 ;;
-  esac
 }
 
 # Версия из raw VERSION (fetch_url → зеркала jsDelivr/ghproxy)
@@ -1675,287 +1604,12 @@ fetch_pkg_version_file() {
   printf '%s\n' "$ver"
 }
 
-ipk_filename() {
-  local pkg="$1" ver="$2" suf
-  case "$pkg" in
-    nfqws-keenetic-web)
-      echo "${pkg}_${ver}_all_entware.ipk"
-      ;;
-    *)
-      suf=$(ipk_arch_suffix)
-      echo "${pkg}_${ver}_${suf}.ipk"
-      ;;
-  esac
-}
-
-# Метаданные .ipk: Packages (github.io) → fallback VERSION + имя файла
-# stdout: VERSION<TAB>FILENAME
-fetch_ipk_meta() {
-  # Только VERSION (быстро). Packages не трогаем.
-  local base="$1" pkg="$2" ver fn repo
-  repo=$(ipk_github_repo "$pkg") || return 1
-  ver=$(fetch_pkg_version_file "$repo") || return 1
-  fn=$(ipk_filename "$pkg" "$ver")
-  printf '%s\t%s\n' "$ver" "$fn"
-  return 0
-}
-
-# Скачать .ipk: github.io → GitHub Releases
-# Путь основного конфига пакета (пусто если не nfqws*)
-ipk_conf_path() {
-  case "$1" in
-    nfqws-keenetic)  echo "${CONF_BASE_DIR}/nfqws/nfqws.conf" ;;
-    nfqws2-keenetic) echo "${CONF_BASE_DIR}/nfqws2/nfqws2.conf" ;;
-    *) echo "" ;;
-  esac
-}
-
-# Каталог etc пакета в data.tar.gz
-ipk_etc_dir() {
-  case "$1" in
-    nfqws-keenetic)  echo "${CONF_BASE_DIR}/nfqws" ;;
-    nfqws2-keenetic) echo "${CONF_BASE_DIR}/nfqws2" ;;
-    *) echo "" ;;
-  esac
-}
-
-# Если opkg не положил conffiles — достаём их из data.tar.gz .ipk
-# (типично после «Not deleting modified conffile» + rm -rf: статус opkg
-#  считает файлы «пользовательскими» и при install не восстанавливает)
-extract_ipk_etc() {
-  local ipk="$1" pkg="$2" tmp etc
-  etc=$(ipk_etc_dir "$pkg")
-  [ -n "$etc" ] && [ -f "$ipk" ] || return 1
-
-  tmp="/tmp/ipk-ex-$$"
-  rm -rf "$tmp"
-  mkdir -p "$tmp" || return 1
-
-  if ! tar -xzf "$ipk" -C "$tmp" 2>/dev/null; then
-    rm -rf "$tmp"
-    return 1
-  fi
-  if [ ! -f "$tmp/data.tar.gz" ]; then
-    rm -rf "$tmp"
-    return 1
-  fi
-
-  # пути в архиве: ./opt/etc/nfqws2/...
-  if tar -xzf "$tmp/data.tar.gz" -C / ".$etc" 2>/dev/null; then
-    :
-  elif tar -xzf "$tmp/data.tar.gz" -C / "${etc#/}" 2>/dev/null; then
-    :
-  else
-    # вытащить весь opt/etc/...
-    tar -xzf "$tmp/data.tar.gz" -C / --wildcards '*/etc/nfqws2/*' 2>/dev/null || \
-    tar -xzf "$tmp/data.tar.gz" -C / --wildcards '*/etc/nfqws/*' 2>/dev/null || true
-  fi
-
-  rm -rf "$tmp"
-  [ -d "$etc" ] || return 1
-  return 0
-}
-
-# Установка локального .ipk
-#
-#  не установлен     → opkg install
-#  стоит другая ver  → opkg install (upgrade 1.3.0→1.3.1)
-#  стоит та же ver   → force-reinstall
-_opkg_install_ipk() {
-  # Как вручную: opkg install /tmp/file.ipk — без лишних --force-*
-  # (force-maintainer/overwrite на Entware ломали распаковку conffiles)
-  local dest="$1" pkg="$2" new_ver="$3"
-  local cur
-
-  refresh_opkg_cache
-
-  if ! is_installed "$pkg"; then
-    info "Чистая установка $pkg $new_ver"
-    opkg install "$dest"
-    return $?
-  fi
-
-  cur=$(pkg_version "$pkg")
-  if [ -n "$cur" ] && [ -n "$new_ver" ] && [ "$cur" != "$new_ver" ]; then
-    info "Обновление $pkg: $cur → $new_ver"
-    opkg install "$dest"
-    return $?
-  fi
-
-  # Та же версия: обычный install даст «up to date» и не тронет файлы
-  info "Та же версия ($cur) — force-reinstall"
-  case "$pkg" in
-    nfqws2-keenetic) stop_nfqws2_hard ;;
-    nfqws-keenetic)  stop_nfqws1_hard ;;
-  esac
-  PKG_UPGRADE=1 opkg install --force-reinstall "$dest"
-  return $?
-}
-
-install_ipk_from_repo() {
-  # $1=label $2=pkg $3=base $4=version (опционально)
-  local label="$1" pkg="$2" base="$3" ver_hint="${4:-}"
-  local meta ver fn url dest repo ok=0 _c _m _w conf
-
-  [ -z "$ARCH" ] && detect_arch
-  conf=$(ipk_conf_path "$pkg")
-  refresh_opkg_cache
-
-  if [ -n "$ver_hint" ] && [ "$ver_hint" != "?" ]; then
-    ver="$ver_hint"
-    fn=$(ipk_filename "$pkg" "$ver")
-    info "Пакет $pkg $ver"
-  else
-    info "Получение сведений о пакете $pkg ..."
-    meta=$(fetch_ipk_meta "$base" "$pkg") || {
-      error "Не удалось определить версию $pkg"
-      return 1
-    }
-    ver=$(printf '%s\n' "$meta" | head -1 | cut -f1 | tr -d '\r')
-    fn=$(printf '%s\n' "$meta" | head -1 | cut -f2 | tr -d '\r')
-  fi
-  [ -n "$ver" ] && [ -n "$fn" ] || {
-    error "Пустые метаданные для $pkg"
-    return 1
-  }
-
-  dest="/tmp/${fn}"
-  rm -f "$dest"
-  info "Скачивание $fn ..."
-
-  repo=$(ipk_github_repo "$pkg") || repo=""
-  _c="$CURL_CONNECT_TIMEOUT"; _m="$CURL_MAX_TIME"; _w="$WGET_TIMEOUT"
-  CURL_CONNECT_TIMEOUT=8
-  CURL_MAX_TIME=90
-  WGET_TIMEOUT=90
-
-  # Приоритет: github.com → ghproxy → github.io (с прогрессом)
-  for url in \
-    ${repo:+"https://github.com/${repo}/releases/download/v${ver}/${fn}"} \
-    ${repo:+"https://ghproxy.net/https://github.com/${repo}/releases/download/v${ver}/${fn}"} \
-    "${base}/${fn}" \
-    "https://ghproxy.net/${base}/${fn}"
-  do
-    [ -n "$url" ] || continue
-    printf '%s\n' "${DIM}  ← $url${NC}" >&2
-    if _http_get_file_progress "$url" "$dest" && [ -s "$dest" ]; then
-      info "Скачано ($(( $(wc -c < "$dest" | tr -d ' ') / 1024 )) КБ)"
-      ok=1
-      break
-    fi
-    rm -f "$dest"
-  done
-
-  CURL_CONNECT_TIMEOUT="$_c"
-  CURL_MAX_TIME="$_m"
-  WGET_TIMEOUT="$_w"
-
-  if [ "$ok" -ne 1 ] || [ ! -s "$dest" ]; then
-    error "Не удалось скачать $fn"
-    rm -f "$dest"
-    return 1
-  fi
-
-  if ! _opkg_install_ipk "$dest" "$pkg" "$ver"; then
-    error "Не удалось установить $fn"
-    rm -f "$dest"
-    return 1
-  fi
-
-  refresh_opkg_cache
-
-  # opkg иногда не кладёт conffiles — докладываем из .ipk
-  if [ -n "$conf" ] && [ ! -f "$conf" ]; then
-    warn "opkg не создал $conf — распаковка из .ipk..."
-    if extract_ipk_etc "$dest" "$pkg" && [ -f "$conf" ]; then
-      info "Конфиги восстановлены из .ipk"
-    else
-      error "После установки нет $conf"
-      rm -f "$dest"
-      return 1
-    fi
-  fi
-
-  if [ -n "$conf" ]; then
-    info "$label $ver OK. Конфиг: $conf"
-  else
-    info "$label $ver установлен."
-  fi
-
-  rm -f "$dest"
-  return 0
-}
-
-menu_install_ipk_direct() {
-  local v1="?" v2="?" vweb="?" base1 base2 baseweb meta choice
-
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    error "Ручная установка .ipk поддерживается только на Entware — на OpenWrt используйте установку из фида (пункты 1/2)."
-    return 1
-  fi
-
-  need_arch || return 1
-
-  base1="https://nfqws.github.io/nfqws-keenetic/${ARCH}"
-  base2="https://nfqws.github.io/nfqws2-keenetic/${ARCH}"
-  baseweb="https://nfqws.github.io/nfqws-keenetic-web/all"
-
-  info "Запрос крайних версий .ipk (архитектура: $ARCH) ..."
-  meta=$(fetch_ipk_meta "$base1" "nfqws-keenetic" 2>/dev/null) && v1=$(printf '%s\n' "$meta" | head -1 | cut -f1 | tr -d '\r')
-  meta=$(fetch_ipk_meta "$base2" "nfqws2-keenetic" 2>/dev/null) && v2=$(printf '%s\n' "$meta" | head -1 | cut -f1 | tr -d '\r')
-  meta=$(fetch_ipk_meta "$baseweb" "nfqws-keenetic-web" 2>/dev/null) && vweb=$(printf '%s\n' "$meta" | head -1 | cut -f1 | tr -d '\r')
-  [ -z "$v1" ] && v1="?"
-  [ -z "$v2" ] && v2="?"
-  [ -z "$vweb" ] && vweb="?"
-  if [ "$v1" = "?" ] && [ "$v2" = "?" ] && [ "$vweb" = "?" ]; then
-    warn "Не удалось получить версии (github.io / GitHub). Проверьте сеть или туннель."
-  fi
-
-  echo
-  printf '%s\n' "${BOLD}── ${LBL_IPK_TITLE} ──${NC}"
-  printf "  %s1)%s  nfqws-keenetic       %s%s%s\n" "$GREEN" "$NC" "$CYAN" "$v1" "$NC"
-  printf "  %s2)%s  nfqws2-keenetic      %s%s%s\n" "$GREEN" "$NC" "$CYAN" "$v2" "$NC"
-  printf "  %s3)%s  nfqws-keenetic-web   %s%s%s\n" "$GREEN" "$NC" "$CYAN" "$vweb" "$NC"
-  printf "  %s0)%s  ${LBL_CANCEL}\n" "$DIM" "$NC"
-  ask "${LBL_YOUR_CHOICE} [0]: "
-  read_menu choice
-  case "$choice" in
-    1)
-      [ "$v1" = "?" ] && { error "Версия nfqws-keenetic неизвестна."; return 1; }
-      install_ipk_from_repo "nfqws-keenetic" "nfqws-keenetic" "$base1" "$v1" || return 1
-      ask_web_install
-      ;;
-    2)
-      [ "$v2" = "?" ] && { error "Версия nfqws2-keenetic неизвестна."; return 1; }
-      if is_installed "nfqws-keenetic"; then
-        warn "Обнаружен nfqws-keenetic. Рекомендуется удалить его перед установкой nfqws2."
-        if confirm_no "Удалить nfqws-keenetic и веб-интерфейс?"; then
-          stop_nfqws1_hard
-          pkg_remove nfqws-keenetic-web nfqws-keenetic 2>/dev/null || true
-          stop_nfqws1_hard
-        fi
-      fi
-      install_ipk_from_repo "nfqws2-keenetic" "nfqws2-keenetic" "$base2" "$v2" || return 1
-      ask_web_install
-      ;;
-    3)
-      [ "$vweb" = "?" ] && { error "Версия nfqws-keenetic-web неизвестна."; return 1; }
-      install_ipk_from_repo "nfqws-keenetic-web" "nfqws-keenetic-web" "$baseweb" "$vweb" || return 1
-      info "Адрес: http://<IP-роутера>:90"
-      info "Логин/пароль — учётные данные Entware (по умолчанию root / keenetic)"
-      ;;
-    0|"") info "${LBL_CANCEL}."; return 0 ;;
-    *) warn "${LBL_INVALID}"; return 1 ;;
-  esac
-}
-
 menu_install_nfqws() {
   echo
   printf '%s\n' "${BOLD}── ${LBL_INSTALL_TITLE} ──${NC}"
   printf "  %s1)%s  nfqws-keenetic\n" "$GREEN" "$NC"
   printf "  %s2)%s  nfqws2-keenetic\n" "$GREEN" "$NC"
   printf "  %s3)%s  nfqws-keenetic-web\n" "$GREEN" "$NC"
-  printf "  %s4)%s  ${LBL_IPK_MENU}\n" "$GREEN" "$NC"
   printf "  %s0)%s  ${LBL_BACK_ITEM}\n" "$DIM" "$NC"
   ask "${LBL_YOUR_CHOICE} [0]: "
   read_menu choice
@@ -1963,7 +1617,6 @@ menu_install_nfqws() {
     1) install_nfqws1 ;;
     2) install_nfqws2 ;;
     3) install_web ;;
-    4) menu_install_ipk_direct ;;
     0|"") return ;;
     *) warn "${LBL_INVALID}" ;;
   esac
@@ -1972,23 +1625,13 @@ menu_install_nfqws() {
 install_web() {
   info "Установка nfqws-keenetic-web..."
   install_deps
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    if ! ensure_openwrt_feed_key "nfqws-keenetic-web"; then
-      return 1
-    fi
-    ensure_opkg_repo "nfqws-keenetic-web" "$(nfqws_feed_url nfqws-keenetic-web)"
-  else
-    ensure_opkg_repo "nfqws-keenetic-web" "https://nfqws.github.io/nfqws-keenetic-web/all"
-  fi
+  ensure_openwrt_feed_key "nfqws-keenetic-web" || return 1
+  ensure_opkg_repo "nfqws-keenetic-web" "$(nfqws_feed_url nfqws-keenetic-web)"
   pkg_install nfqws-keenetic-web
   info "Веб-интерфейс установлен."
-  info "Адрес: http://<IP-роутера>:90"
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    info "Логин/пароль — учётные данные root-пользователя роутера"
-    info "Авторизацию можно отключить: ${CONF_BASE_DIR}/nfqws_web.conf → enabled = false"
-  else
-    info "Логин/пароль — учётные данные Entware (по умолчанию root / keenetic)"
-  fi
+  info "Адрес: http://$(get_lan_ip):90"
+  info "Логин/пароль — учётные данные root-пользователя роутера"
+  info "Авторизацию можно отключить: ${CONF_BASE_DIR}/nfqws_web.conf → enabled = false"
 }
 
 # ---------------------------------------------------------------------------
@@ -2732,6 +2375,38 @@ _ipset_fetch_clean() {
   return 0
 }
 
+_ipset_write_file() {
+  local src="$1" dest="$2" cnt="$3" dir
+  dir=$(dirname "$dest")
+  mkdir -p "$dir"
+  backup_file "$dest"
+  cp "$src" "$dest"
+  info "Записано: $dest ($cnt строк)"
+}
+
+_ipset_apply_and_restart() {
+  local src="$1" cnt="$2"
+  case "$NFQWS_VER" in
+    1)
+      _ipset_write_file "$src" "$(nfqws_lists_dir 1)/ipset.list" "$cnt"
+      service_restart "$(nfqws_init_path 1)"
+      info "Сервис nfqws перезапущен."
+      ;;
+    2)
+      _ipset_write_file "$src" "$(nfqws_lists_dir 2)/ipset.list" "$cnt"
+      service_restart "$(nfqws_init_path 2)"
+      info "Сервис nfqws2 перезапущен."
+      ;;
+    both)
+      _ipset_write_file "$src" "$(nfqws_lists_dir 1)/ipset.list" "$cnt"
+      _ipset_write_file "$src" "$(nfqws_lists_dir 2)/ipset.list" "$cnt"
+      service_restart "$(nfqws_init_path 1)"
+      service_restart "$(nfqws_init_path 2)"
+      info "Сервисы перезапущены."
+      ;;
+  esac
+}
+
 update_ipset_list() {
   need_nfqws_installed || return
 
@@ -2758,37 +2433,6 @@ update_ipset_list() {
 
   pick_nfqws_ver 1 || return
 
-  write_ipset() {
-    local dest="$1" dir
-    dir=$(dirname "$dest")
-    mkdir -p "$dir"
-    backup_file "$dest"
-    cp "$tmp" "$dest"
-    info "Записано: $dest ($count строк)"
-  }
-
-  apply_and_restart() {
-    case "$NFQWS_VER" in
-      1)
-        write_ipset "$(nfqws_lists_dir 1)/ipset.list"
-        service_restart "$(nfqws_init_path 1)"
-        info "Сервис nfqws перезапущен."
-        ;;
-      2)
-        write_ipset "$(nfqws_lists_dir 2)/ipset.list"
-        service_restart "$(nfqws_init_path 2)"
-        info "Сервис nfqws2 перезапущен."
-        ;;
-      both)
-        write_ipset "$(nfqws_lists_dir 1)/ipset.list"
-        write_ipset "$(nfqws_lists_dir 2)/ipset.list"
-        service_restart "$(nfqws_init_path 1)"
-        service_restart "$(nfqws_init_path 2)"
-        info "Сервисы перезапущены."
-        ;;
-    esac
-  }
-
   if [ "$choice" = "1" ]; then
     src_label="Flowseal/zapret-discord-youtube"
     info "Скачивание IPSet с $src_label ..."
@@ -2796,13 +2440,13 @@ update_ipset_list() {
       rm -f "$tmp"
       return 1
     fi
-    apply_and_restart
+    _ipset_apply_and_restart "$tmp" "$count"
     rm -f "$tmp"
     return 0
   fi
 
   # choice=2 — стандартный ipset из репозитория пакета
-  src_label="nfqws (офиставка пакета)"
+  src_label="nfqws (поставка пакета)"
   info "Скачивание стандартного IPSet ($src_label) ..."
 
   case "$NFQWS_VER" in
@@ -2811,7 +2455,7 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "$(nfqws_lists_dir 1)/ipset.list"
+      _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$count"
       service_restart "$(nfqws_init_path 1)"
       info "Сервис nfqws перезапущен."
       ;;
@@ -2820,7 +2464,7 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "$(nfqws_lists_dir 2)/ipset.list"
+      _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$count"
       service_restart "$(nfqws_init_path 2)"
       info "Сервис nfqws2 перезапущен."
       ;;
@@ -2830,13 +2474,13 @@ update_ipset_list() {
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "$(nfqws_lists_dir 1)/ipset.list"
+      _ipset_write_file "$tmp" "$(nfqws_lists_dir 1)/ipset.list" "$count"
       # v2
       if ! _ipset_fetch_clean "$IPSET_NFQWS2_URL" "$tmp"; then
         rm -f "$tmp"
         return 1
       fi
-      write_ipset "$(nfqws_lists_dir 2)/ipset.list"
+      _ipset_write_file "$tmp" "$(nfqws_lists_dir 2)/ipset.list" "$count"
       service_restart "$(nfqws_init_path 1)"
       service_restart "$(nfqws_init_path 2)"
       info "Сервисы перезапущены."
@@ -2948,11 +2592,47 @@ inject_rkn_into_mode_list() {
   return 0
 }
 
+# Применить rkn.list к выбранной версии: $1=ver $2=src_tmp $3=count $4=skip_download
+_rkn_apply_for_ver() {
+  local ver="$1" src_tmp="$2" cnt="$3" skip_dl="$4"
+  local dest init_script conf need_restart=0 had_rkn=0
+
+  dest=$(rkn_list_path "$ver") || return 1
+  init_script=$(nfqws_init_path "$ver")
+  conf=$(nfqws_conf_path "$ver")
+
+  if [ "$skip_dl" -eq 0 ]; then
+    mkdir -p "$(dirname "$dest")"
+    cp "$src_tmp" "$dest"
+    info "Записано: $dest ($cnt строк)"
+    need_restart=1
+  fi
+
+  # Была ли привязка до inject (чтобы не перезапускать зря)
+  conf_has_rkn_hostlist "$conf" "$ver" && had_rkn=1
+
+  inject_rkn_into_mode_list "$ver" "$conf" || true
+
+  # Перезапуск: обновили файл списка ИЛИ только что добавили в MODE_LIST
+  if [ "$need_restart" -eq 1 ] || [ "$had_rkn" -eq 0 ]; then
+    if [ "$had_rkn" -eq 0 ] && conf_has_rkn_hostlist "$conf" "$ver"; then
+      need_restart=1
+    fi
+  fi
+
+  if [ "$need_restart" -eq 1 ]; then
+    service_restart "$init_script"
+    info "Сервис перезапущен ($init_script)."
+  else
+    info "Изменений нет — перезапуск сервиса не требуется (v$ver)."
+  fi
+}
+
 update_rkn_list() {
   need_nfqws_installed || return
   pick_nfqws_ver 1 || return
 
-  local tmp="/tmp/nfqws-rkn-$$.txt" count
+  local tmp="/tmp/nfqws-rkn-$$.txt" count=""
   local skip_download=0
 
   # Проверяем существующие файлы (любая из выбранных версий)
@@ -3029,49 +2709,12 @@ update_rkn_list() {
     info "Записей в списке: $count"
   fi
 
-  # Применить к выбранной версии (или обеим)
-  apply_rkn_for_ver() {
-    local ver="$1"
-    local dest init_script conf need_restart=0 had_rkn=0
-
-    dest=$(rkn_list_path "$ver") || return 1
-    init_script=$(nfqws_init_path "$ver")
-    conf=$(nfqws_conf_path "$ver")
-
-    if [ "$skip_download" -eq 0 ]; then
-      mkdir -p "$(dirname "$dest")"
-      cp "$tmp" "$dest"
-      info "Записано: $dest ($count строк)"
-      need_restart=1
-    fi
-
-    # Была ли привязка до inject (чтобы не перезапускать зря)
-    conf_has_rkn_hostlist "$conf" "$ver" && had_rkn=1
-
-    inject_rkn_into_mode_list "$ver" "$conf" || true
-
-    # Перезапуск: обновили файл списка ИЛИ только что добавили в MODE_LIST
-    if [ "$need_restart" -eq 1 ] || [ "$had_rkn" -eq 0 ]; then
-      # had_rkn=0 → inject мог добавить (или conf отсутствовал) → restart
-      if [ "$had_rkn" -eq 0 ] && conf_has_rkn_hostlist "$conf" "$ver"; then
-        need_restart=1
-      fi
-    fi
-
-    if [ "$need_restart" -eq 1 ]; then
-      service_restart "$init_script"
-      info "Сервис перезапущен ($init_script)."
-    else
-      info "Изменений нет — перезапуск сервиса не требуется (v$ver)."
-    fi
-  }
-
   case "$NFQWS_VER" in
-    1)   apply_rkn_for_ver 1 ;;
-    2)   apply_rkn_for_ver 2 ;;
+    1)   _rkn_apply_for_ver 1 "$tmp" "$count" "$skip_download" ;;
+    2)   _rkn_apply_for_ver 2 "$tmp" "$count" "$skip_download" ;;
     both)
-      apply_rkn_for_ver 1
-      apply_rkn_for_ver 2
+      _rkn_apply_for_ver 1 "$tmp" "$count" "$skip_download"
+      _rkn_apply_for_ver 2 "$tmp" "$count" "$skip_download"
       ;;
   esac
 
@@ -3145,7 +2788,6 @@ load_dot_doh_strategy() {
     # убрать CRLF и пустые ведущие строки
     tr -d '\r' < "$tmp" | sed '/^[[:space:]]*$/d' > "$dest"
     rm -f "$tmp"
-    # пути под префикс пакета (/opt на Entware, / на OpenWrt)
     strategy_retarget_paths "$dest"
     # маркер #DNS в начало, если его нет
     if ! grep -qE '^[[:space:]]*#DNS' "$dest" 2>/dev/null; then
@@ -3162,10 +2804,7 @@ load_dot_doh_strategy() {
   else
     printf '%s\n' "$DOT_DOH_STRATEGY_NFQWS2" > "$dest"
   fi
-  # Пути blob-файлов в стратегии — под префикс пакета (/opt на Entware, / на OpenWrt)
-  if [ "$CONF_BASE_DIR" != "/opt/etc" ]; then
-    sed -i "s|/opt/etc/nfqws2/|${CONF_BASE_DIR}/nfqws2/|g; s|/opt/etc/nfqws/|${CONF_BASE_DIR}/nfqws/|g" "$dest" 2>/dev/null || true
-  fi
+  strategy_retarget_paths "$dest"
   return 0
 }
 
@@ -3304,16 +2943,8 @@ apply_dot_doh_for_ver() {
 }
 
 menu_dot_doh() {
-  # refresh — кэш мог устареть; return 0 — set -e не должен выкидывать из меню
   refresh_opkg_cache
-  local has1=0 has2=0
-  is_installed "nfqws-keenetic"  && has1=1
-  is_installed "nfqws2-keenetic" && has2=1
-
-  if [ "$has1" -eq 0 ] && [ "$has2" -eq 0 ]; then
-    error "Пункт доступен при установленном nfqws-keenetic и/или nfqws2-keenetic."
-    return 0
-  fi
+  need_nfqws_installed || return 0
 
   echo
   info "Стратегии: dns_filter_nfqws1 / dns_filter_nfqws2"
@@ -3321,40 +2952,23 @@ menu_dot_doh() {
   info "  https://github.com/Dea1hwa1cher/nfqws-menu-openwrt/blob/main/strategies/dns_filter_nfqws2"
   echo
 
-  if [ "$has1" -eq 1 ] && [ "$has2" -eq 1 ]; then
-    echo "Установлены обе версии."
-    echo "  1) nfqws-keenetic  (v1) — dns_filter_nfqws1"
-    echo "  2) nfqws2-keenetic (v2) — dns_filter_nfqws2"
-    echo "  a) Обе"
-    ask "${LBL_YOUR_CHOICE} [0 = отмена]: "
-    read_menu c
-    case "$c" in
-      1)
-        confirm_yes "Добавить стратегию обхода DoT/DoH в NFQWS_ARGS_CUSTOM (nfqws1)?" || { info "Отменено."; return 0; }
-        apply_dot_doh_for_ver 1 || true
-        ;;
-      2)
-        confirm_yes "Добавить стратегию обхода DoT/DoH в NFQWS_ARGS_CUSTOM (nfqws2)?" || { info "Отменено."; return 0; }
-        apply_dot_doh_for_ver 2 || true
-        ;;
-      a|A|а|А)
-        confirm_yes "Добавить стратегию обхода DoT/DoH в оба конфига?" || { info "Отменено."; return 0; }
-        apply_dot_doh_for_ver 1 || true
-        apply_dot_doh_for_ver 2 || true
-        ;;
-      *) info "Отменено."; return 0 ;;
-    esac
-  elif [ "$has1" -eq 1 ]; then
-    confirm_yes "Добавить в NFQWS_ARGS_CUSTOM стратегию обхода блокировки DoT/DoH (nfqws1)?" || {
-      info "Отменено."; return 0
-    }
-    apply_dot_doh_for_ver 1 || true
-  else
-    confirm_yes "Добавить в NFQWS_ARGS_CUSTOM стратегию обхода блокировки DoT/DoH (nfqws2)?" || {
-      info "Отменено."; return 0
-    }
-    apply_dot_doh_for_ver 2 || true
-  fi
+  pick_nfqws_ver 1 || { info "Отменено."; return 0; }
+
+  case "$NFQWS_VER" in
+    1)
+      confirm_yes "Добавить стратегию обхода DoT/DoH в NFQWS_ARGS_CUSTOM (nfqws1)?" || { info "Отменено."; return 0; }
+      apply_dot_doh_for_ver 1 || true
+      ;;
+    2)
+      confirm_yes "Добавить стратегию обхода DoT/DoH в NFQWS_ARGS_CUSTOM (nfqws2)?" || { info "Отменено."; return 0; }
+      apply_dot_doh_for_ver 2 || true
+      ;;
+    both)
+      confirm_yes "Добавить стратегию обхода DoT/DoH в оба конфига?" || { info "Отменено."; return 0; }
+      apply_dot_doh_for_ver 1 || true
+      apply_dot_doh_for_ver 2 || true
+      ;;
+  esac
   return 0
 }
 
@@ -3800,7 +3414,7 @@ $(hosts_existing_pairs)
 EOF
 }
 
-# Удалить все записи; $1 = файл со списком доменов
+# Удалить блок записей nfqws-menu из /etc/hosts
 host_entries_delete_all() {
   if [ -f /etc/hosts ] && grep -qF "$HOSTS_MARK_BEGIN" /etc/hosts 2>/dev/null; then
     hosts_strip_block /etc/hosts > /etc/hosts.nfqws.tmp
@@ -3915,39 +3529,27 @@ EOF
     return 0
   fi
 
-  # 88 — удалить все домены из hosts-файла
+  # 88 — удалить все домены из блока nfqws-menu в /etc/hosts
   local want_delete=0
   for c in $(echo "$raw_choices" | tr ',;' '  '); do
     [ "$c" = "88" ] && want_delete=1 && break
   done
   if [ "$want_delete" -eq 1 ]; then
-    local domains="/tmp/nfqws-hosts-dom-$$.txt"
-    awk '
-      /^#/ { next }
-      NF >= 2 {
-        domain = $2
-        if (domain == "" || domain == "." || domain ~ /^\.+$/) next
-        if (!(domain in seen)) {
-          seen[domain] = 1
-          print domain
-        }
-      }
-    ' "$tmp" > "$domains"
-
-    if [ ! -s "$domains" ]; then
-      warn "В файле hosts нет доменов для удаления."
-      rm -f "$tmp" "$sec_file" "$domains"
+    local existing_cnt
+    existing_cnt=$(hosts_existing_pairs | wc -l | tr -d ' ')
+    if [ "${existing_cnt:-0}" -eq 0 ]; then
+      info "Записей nfqws-menu в /etc/hosts нет."
+      rm -f "$tmp" "$sec_file"
       return 0
     fi
 
-    if ! confirm_no "Удалить все домены из hosts ($(wc -l < "$domains" | tr -d ' ') шт.)?"; then
-      rm -f "$tmp" "$sec_file" "$domains"
+    if ! confirm_no "Удалить все записи nfqws-menu из /etc/hosts (${existing_cnt} шт.)?"; then
+      rm -f "$tmp" "$sec_file"
       return 0
     fi
 
-    host_entries_delete_all "$domains"
-
-    rm -f "$tmp" "$sec_file" "$domains"
+    host_entries_delete_all
+    rm -f "$tmp" "$sec_file"
     info "Готово."
     return 0
   fi
@@ -4014,7 +3616,9 @@ $name"
         print ip "\t" domain
       }
     ' "$tmp" >> "$pairs"
-  done
+  done <<EOF
+$selected_secs
+EOF
 
   if [ ! -s "$pairs" ]; then
     warn "В выбранных секциях нет валидных записей IPv4 DOMAIN."
@@ -4025,9 +3629,6 @@ $name"
   # Один IP на домен (последний) — ip host хранит одну запись на имя
   local pairs_uniq="/tmp/nfqws-hosts-uniq-$$.txt"
   awk -F '\t' '{ dom[$2] = $1 } END { for (d in dom) print dom[d] "\t" d }' "$pairs" > "$pairs_uniq"
-
-  local n_pairs
-  n_pairs=$(wc -l < "$pairs_uniq" | tr -d ' ')
 
   host_entries_apply "$pairs_uniq"
 
@@ -4046,15 +3647,10 @@ extract_script_version() {
 # Канонический путь скрипта меню: установленная копия, иначе та, из которой
 # запущены сейчас (иначе п.99 пишет в один файл, а `menu` ссылается на другой)
 menu_script_target() {
-  local t
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    t="/usr/bin/nfqws-menu.sh"
-  else
-    t="/opt/nfqws-menu.sh"
-  fi
+  local t="/usr/bin/nfqws-menu.sh"
   if [ ! -f "$t" ] && [ -n "${SCRIPT_PATH:-}" ] && [ -f "$SCRIPT_PATH" ]; then
     case "$SCRIPT_PATH" in
-      /opt/*|/usr/*|/etc/*|/root/*|/tmp/*) t="$SCRIPT_PATH" ;;
+      /usr/*|/etc/*|/root/*|/tmp/*) t="$SCRIPT_PATH" ;;
     esac
   fi
   printf '%s\n' "$t"
@@ -4117,8 +3713,6 @@ dpi_detector_bin() {
     echo "/usr/local/bin/dpi-detector"
   elif command -v dpi-detector >/dev/null 2>&1; then
     command -v dpi-detector
-  elif [ -x /opt/bin/dpi-detector ]; then
-    echo "/opt/bin/dpi-detector"
   elif [ -x /tmp/dpi-detector ]; then
     echo "/tmp/dpi-detector"
   else
@@ -4134,7 +3728,7 @@ cleanup_dpi_detector_dupes() {
     primary=$(command -v dpi-detector)
   fi
   [ -z "$primary" ] && return 0
-  for f in /tmp/dpi-detector /opt/root/dpi-detector ${HOME:+$HOME/dpi-detector} /tmp/dpi-detector* /opt/root/dpi-detector*; do
+  for f in /tmp/dpi-detector ${HOME:+$HOME/dpi-detector} /tmp/dpi-detector*; do
     [ -f "$f" ] || continue
     [ "$f" = "$primary" ] && continue
     rm -f "$f" && info "  удалён дубликат: $f"
@@ -4301,23 +3895,13 @@ menu_awg_openwrt() {
 # сети, подбор параметров под неё и проверку, что выданная ссылка работает
 # целиком, а не «порт открыт».
 
-# Пути install.sh tg-ws-proxy-rs: OpenWrt — /usr/bin + /etc/init.d + /etc/tg-ws-proxy-rs;
-# Entware — /opt/bin + S99-init + /opt/etc/tg-ws-proxy-rs (тот же лейаут конфигов).
-if [ "$ROUTER_OS" = "openwrt" ]; then
-  TG_WS_PROXY_RS_BIN="/usr/bin/tg-ws-proxy-rs"
-  TG_WS_PROXY_RS_INIT="/etc/init.d/tg-ws-proxy-rs"
-  TG_WS_PROXY_RS_CONF_DIR="/etc/tg-ws-proxy-rs"
-  TG_WS_PROXY_RS_LOG="/var/log/tg-ws-proxy-rs.log"
-else
-  TG_WS_PROXY_RS_BIN="/opt/bin/tg-ws-proxy-rs"
-  TG_WS_PROXY_RS_INIT="/opt/etc/init.d/S99tg-ws-proxy-rs"
-  TG_WS_PROXY_RS_CONF_DIR="/opt/etc/tg-ws-proxy-rs"
-  TG_WS_PROXY_RS_LOG="/opt/var/log/tg-ws-proxy-rs.log"
-fi
+# Пути install.sh tg-ws-proxy-rs на OpenWrt
+TG_WS_PROXY_RS_BIN="/usr/bin/tg-ws-proxy-rs"
+TG_WS_PROXY_RS_INIT="/etc/init.d/tg-ws-proxy-rs"
+TG_WS_PROXY_RS_CONF_DIR="/etc/tg-ws-proxy-rs"
+TG_WS_PROXY_RS_LOG="/var/log/tg-ws-proxy-rs.log"
 TG_WS_PROXY_RS_CONF="$TG_WS_PROXY_RS_CONF_DIR/config.conf"
 TG_WS_PROXY_RS_SECRET="$TG_WS_PROXY_RS_CONF_DIR/secret.conf"
-TG_WS_PROXY_GO_CONF_DIR="/opt/etc/tg-ws-proxy"
-TG_WS_PROXY_GO_INIT="/opt/etc/init.d/S99tg-ws-proxy"
 TG_WS_PROXY_RS_REPO="valnesfjord/tg-ws-proxy-rs"
 TG_WS_PROXY_RS_DC_TARGETS="2:149.154.167.220,4:149.154.167.220"
 TG_WS_PROXY_RS_TOP_DOMAINS=4
@@ -4355,34 +3939,6 @@ tg_ws_proxy_rs_conf_set() {
   mv "$tmp" "$TG_WS_PROXY_RS_CONF"
 }
 
-# Секрет до установки: свой не трогаем, чужой (из Go-установки) переносим — ради
-# этого функция и существует, ссылки клиентов после перехода не меняются.
-#
-# Генерации здесь нет: когда секрета нет ни там ни тут, его создаёт инсталлер
-# (write_entware_config → entware_new_secret, `tr -dc 'a-f0-9' < /dev/urandom`).
-# Раньше меню генерировало само, потому что инсталлер брал те же 16 байт через
-# `od -An -tx1`, а такого ключа у BusyBox нет; с 2.4.6 инсталлер тоже на `tr`,
-# проверено на Keenetic (BusyBox 1.37): `od -An` даёт `invalid option -- 'A'`,
-# генератор инсталлера — 32 hex-символа в 20 прогонах из 20.
-tg_ws_proxy_rs_ensure_secret() {
-  local s
-  s=$(sed -n 's/^SECRET=["]\{0,1\}\([^"]*\)["]\{0,1\}[[:space:]]*$/\1/p' "$TG_WS_PROXY_RS_SECRET" 2>/dev/null | tr -d '\r' | head -1)
-  [ -n "$s" ] && return 0
-
-  s=$(sed -n 's/^SECRET=["]\{0,1\}\([^"]*\)["]\{0,1\}[[:space:]]*$/\1/p' "$TG_WS_PROXY_GO_CONF_DIR/secret.conf" 2>/dev/null | tr -d '\r' | head -1)
-  if [ -n "$s" ]; then
-    mkdir -p "$TG_WS_PROXY_RS_CONF_DIR" || return 1
-    printf 'SECRET=%s\n' "$s" > "$TG_WS_PROXY_RS_SECRET"
-    chmod 0600 "$TG_WS_PROXY_RS_SECRET" 2>/dev/null || true
-    info "Секрет взят из Go-установки — прежние ссылки tg:// продолжат работать."
-    return 0
-  fi
-
-  # Секрета нет вовсе: его создаст инсталлер, здесь ничего не пишем — иначе
-  # пришлось бы держать второй генератор.
-  return 0
-}
-
 # Бэкапы конфига копятся с каждым подбором (по одному на прогон), поэтому
 # держим последние три — так же, как инсталлер поступает со своими.
 tg_ws_proxy_rs_prune_backups() {
@@ -4414,26 +3970,12 @@ tg_ws_proxy_rs_free_port() {
 }
 
 # Имя релизного архива — то, что инсталлер скачает и распакует. Меню нужно оно
-# до установки, чтобы показать размер, поэтому здесь повторены и источник
-# архитектуры (opkg print-architecture), и таблица entware_binary_target из
-# install.sh. Новую архитектуру придётся добавить в обоих местах.
+# до установки, чтобы показать размер.
 tg_ws_proxy_rs_target() {
-  local arch best='' best_pri='' name pri
-  arch=$(opkg print-architecture 2>/dev/null) || arch=''
-  while read -r _keyword name pri; do
-    [ -n "$name" ] || continue
-    case "$name" in all|noarch) continue ;; esac
-    if [ -z "$best_pri" ] || [ "$pri" -gt "$best_pri" ] 2>/dev/null; then
-      best="$name"; best_pri="$pri"
-    fi
-  done <<EOF
-$arch
-EOF
-  # apk (OpenWrt 25.x) не знает opkg; fallback — uname -m
-  [ -n "$best" ] || best=$(apk --print-arch 2>/dev/null) || best=''
+  local best
+  best=$(_arch_from_opkg)
+  [ -n "$best" ] || best="${DISTRIB_ARCH_VAL:-$ARCH_RAW}"
   [ -n "$best" ] || best=$(uname -m 2>/dev/null) || return 1
-  # имена OpenWrt содержат суффиксы через «_» (mipsel_24kc, aarch64_cortex-a53),
-  # Entware — через «-» (armv7-3.10), поэтому сравниваем по префиксу
   case "$best" in
     aarch64*)        printf '%s' aarch64-unknown-linux-musl ;;
     armv7*|arm_cortex-a[7-9]*|arm_cortex-a1[0-5]*) printf '%s' armv7-unknown-linux-musleabihf ;;
@@ -4569,16 +4111,10 @@ tg_ws_proxy_rs_install() {
     error "Не удалось скачать целый install.sh — проверьте доступ к GitHub / зеркалам."
     return 1
   fi
-  tg_ws_proxy_rs_ensure_secret || return 1
   info "Установка из релиза…"
-  # --platform задаём явно: у установщика ветки OpenWrt/LuCI и Entware (/opt +
-  # rc.unslung), автодетект тоже работает, но детерминизм важнее.
-  # Вывод показываем под отступом и без строк, которые дальше повторяет меню:
-  # ссылку оно печатает само (и только после проверки связи), а «Rollback
-  # backup» дублирует «Backup» тем же путём.
-  local plat="entware"
-  [ "$ROUTER_OS" = "openwrt" ] && plat="openwrt"
-  out=$(sh "$script" --platform "$plat" $upx_arg 2>&1)
+  # --platform openwrt задаём явно; вывод показываем под отступом и без строк,
+  # которые дальше повторяет меню.
+  out=$(sh "$script" --platform openwrt $upx_arg 2>&1)
   rc=$?
   rm -f "$script"
   # Инсталлер красит вывод ANSI-кодами, поэтому сначала снимаем цвет (меню
@@ -4599,7 +4135,6 @@ tg_ws_proxy_rs_install() {
   else
     info "Установлено: $(tg_ws_proxy_rs_version)"
   fi
-  tg_ws_proxy_rs_disable_go_init || true
   return 0
 }
 
@@ -4613,17 +4148,6 @@ tg_ws_proxy_rs_restart() {
   fi
   warn "Сервис не перезапустился — смотрите лог: $TG_WS_PROXY_RS_LOG"
   return 1
-}
-
-# Прежний Go-сервис выключается на автозапуск, а не удаляется: два прокси на
-# одном порту после перезагрузки поднимутся оба, и один не сможет занять порт.
-# Инсталлер делает это сам, только если процесс Go ещё держал порт — если его
-# остановили раньше (как делает этот пункт), бит остаётся выставленным.
-tg_ws_proxy_rs_disable_go_init() {
-  [ -x "$TG_WS_PROXY_GO_INIT" ] || return 0
-  chmod -x "$TG_WS_PROXY_GO_INIT" || return 1
-  info "Go-сервис выключен из автозапуска: $TG_WS_PROXY_GO_INIT (вернуть — chmod +x)."
-  return 0
 }
 
 # Замер CF-доменов: --check печатает строку на домен, но WARN-строки лога
@@ -4904,14 +4428,6 @@ menu_tg_ws_proxy_rs() {
     fi
   else
     info "TG WS Proxy Rust (tg-ws-proxy-rs)"
-    # Порт занимает прежний Go-прокси: пока его сервис запущен, Rust не сможет
-    # занять тот же порт. Секрет при этом переносится, ссылки не меняются.
-    if is_installed "tg-ws-proxy" && service_is_up tg-ws-proxy; then
-      warn "Go-прокси (tg-ws-proxy) сейчас занимает порт."
-      if confirm_yes "Остановить Go-прокси? Секрет перенесём, ссылки не изменятся."; then
-        [ -x "$TG_WS_PROXY_GO_INIT" ] && "$TG_WS_PROXY_GO_INIT" stop 2>/dev/null
-      fi
-    fi
     confirm_yes "Установить tg-ws-proxy-rs?" || return 0
     tg_ws_proxy_rs_install || return 1
     fresh=1
@@ -4964,13 +4480,7 @@ menu_magitrickle() {
   info "MagiTrickle"
   refresh_opkg_cache
 
-  local mag_init
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    # нативный OpenWrt-пакет (procd); add_repo.sh сам умеет opkg/apk
-    mag_init="/etc/init.d/magitrickle"
-  else
-    mag_init="/opt/etc/init.d/S99magitrickle"
-  fi
+  local mag_init="/etc/init.d/magitrickle"
 
   if is_installed "magitrickle"; then
     info "Пакет установлен — обновление..."
@@ -5104,14 +4614,8 @@ install_luci_telemt() {
     fi
 
     info "Установка пакета ядра ${core_fn}..."
-    if [ "$backend" = "apk" ]; then
-      if ! apk add --allow-untrusted "$dest_core"; then
-        warn "Ошибка при apk add для ${core_fn}."
-      fi
-    else
-      if ! opkg install "$dest_core"; then
-        warn "Ошибка при opkg install для ${core_fn}."
-      fi
+    if ! pkg_install_file "$dest_core"; then
+      warn "Ошибка при установке пакета ядра ${core_fn}."
     fi
     rm -f "$dest_core"
   fi
@@ -5149,18 +4653,10 @@ install_luci_telemt() {
   fi
 
   info "Установка пакета ${luci_fn}..."
-  if [ "$backend" = "apk" ]; then
-    if ! apk add --allow-untrusted "$dest_luci"; then
-      error "Не удалось установить ${luci_fn}."
-      rm -f "$dest_luci"
-      return 1
-    fi
-  else
-    if ! opkg install "$dest_luci"; then
-      error "Не удалось установить ${luci_fn}."
-      rm -f "$dest_luci"
-      return 1
-    fi
+  if ! pkg_install_file "$dest_luci"; then
+    error "Не удалось установить ${luci_fn}."
+    rm -f "$dest_luci"
+    return 1
   fi
   rm -f "$dest_luci"
 
@@ -5175,7 +4671,7 @@ install_luci_telemt() {
 
   echo
   info "Установка luci-app-telemt успешно завершена!"
-  local lan_ip; lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>")
+  local lan_ip; lan_ip=$(get_lan_ip)
   printf '%s\n' "  Веб-интерфейс доступен в LuCI:"
   printf '%s\n' "  ${GREEN}${BOLD}http://${lan_ip}/cgi-bin/luci/admin/services/telemt${NC}"
   echo
@@ -5222,7 +4718,7 @@ telemt_show_info() {
   port=$(uci get telemt.main.port 2>/dev/null || echo "не задан")
   host=$(uci get telemt.main.mask_host 2>/dev/null || echo "не задан")
   secret=$(uci get telemt.main.secret 2>/dev/null || echo "")
-  lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>")
+  lan_ip=$(get_lan_ip)
 
   printf '  Порт:       %s\n' "$port"
   printf '  Маскировка: %s\n' "$host"
@@ -5265,7 +4761,7 @@ menu_telemt() {
       printf '  Сервис telemt:       %s\n' "$svc_st"
     fi
 
-    lan_ip=$(uci get network.lan.ipaddr 2>/dev/null || echo "<ip-роутера>")
+    lan_ip=$(get_lan_ip)
     printf '  Ссылка в LuCI:       http://%s/cgi-bin/luci/admin/services/telemt\n' "$lan_ip"
     echo
     echo "  1. Установить / обновить luci-app-telemt и ядро telemt"
@@ -5411,15 +4907,12 @@ remove_awg_openwrt() {
     sed -i '\|slava-shchipunov\.github\.io/awg-openwrt|d' /etc/apk/repositories.d/customfeeds.list 2>/dev/null || true
   fi
   rm -f /etc/apk/keys/awg-openwrt-feed.pem /tmp/awg-openwrt-feed.* 2>/dev/null || true
-  [ -d /opt/etc/awg-manager ] && rm -rf /opt/etc/awg-manager && info "  удалён каталог: /opt/etc/awg-manager"
   refresh_opkg_cache
   info "AmneziaWG удалён."
 }
 
-
 remove_magitrickle() {
-  local mag_init="/opt/etc/init.d/S99magitrickle"
-  [ "$ROUTER_OS" = "openwrt" ] && mag_init="/etc/init.d/magitrickle"
+  local mag_init="/etc/init.d/magitrickle"
   if is_installed "magitrickle"; then
     [ -x "$mag_init" ] && "$mag_init" stop 2>/dev/null || true
     pkg_remove magitrickle 2>/dev/null || true
@@ -5428,14 +4921,8 @@ remove_magitrickle() {
     warn "magitrickle не установлен."
   fi
   # репозиторий пишет add_repo.sh — имя файла нам неизвестно, ищем по подстроке
-  local repo_files="" f rc
-  if [ "$(pkg_backend)" = "apk" ]; then
-    rc="$APK_REPO_DIR"
-  elif [ "$ROUTER_OS" = "openwrt" ]; then
-    rc="$OPKG_CONF_DIR"
-  else
-    rc="/opt/etc/opkg"
-  fi
+  local repo_files="" f rc="$OPKG_CONF_DIR"
+  [ "$(pkg_backend)" = "apk" ] && rc="$APK_REPO_DIR"
   for f in "$rc"/*magitrickle*; do
     if [ -f "$f" ]; then
       repo_files="$repo_files
@@ -5459,25 +4946,6 @@ $repo_files
 EOF
   else
     info "Репозиторий MagiTrickle оставлен."
-  fi
-}
-
-remove_opera_proxy() {
-  if is_installed "opera-proxy"; then
-    [ -x /opt/etc/init.d/S99opera-proxy ] && /opt/etc/init.d/S99opera-proxy stop 2>/dev/null || true
-    [ -x /opt/etc/init.d/S80opera-proxy ] && /opt/etc/init.d/S80opera-proxy stop 2>/dev/null || true
-    pkg_remove opera-proxy 2>/dev/null || true
-    info "opera-proxy удалён."
-  else
-    warn "opera-proxy не установлен."
-  fi
-  if [ -f /opt/etc/opkg/sw.ext.io.conf ]; then
-    echo
-    if confirm_no "Удалить репозиторий opera-proxy (/opt/etc/opkg/sw.ext.io.conf)?"; then
-      rm -f /opt/etc/opkg/sw.ext.io.conf && info "  удалён: /opt/etc/opkg/sw.ext.io.conf"
-    else
-      info "Репозиторий opera-proxy оставлен."
-    fi
   fi
 }
 
@@ -5818,14 +5286,8 @@ stop_nfqws2_hard() {
   init=$(nfqws_init_path 2)
   [ -x "$init" ] && "$init" stop 2>/dev/null || true
   killall nfqws2 2>/dev/null || true
-  # на всякий случай по полному пути
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    killall /usr/bin/nfqws2 2>/dev/null || true
-    rm -f /var/run/nfqws2.pid
-  else
-    killall /opt/usr/bin/nfqws2 2>/dev/null || true
-    rm -f /opt/var/run/nfqws2.pid
-  fi
+  killall /usr/bin/nfqws2 2>/dev/null || true
+  rm -f /var/run/nfqws2.pid
 }
 
 stop_nfqws1_hard() {
@@ -5833,13 +5295,8 @@ stop_nfqws1_hard() {
   init=$(nfqws_init_path 1)
   [ -x "$init" ] && "$init" stop 2>/dev/null || true
   killall nfqws 2>/dev/null || true
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    killall /usr/bin/nfqws 2>/dev/null || true
-    rm -f /var/run/nfqws.pid
-  else
-    killall /opt/usr/bin/nfqws 2>/dev/null || true
-    rm -f /opt/var/run/nfqws.pid
-  fi
+  killall /usr/bin/nfqws 2>/dev/null || true
+  rm -f /var/run/nfqws.pid
 }
 
 # Удаление пакета nfqws* с предварительным kill
@@ -5878,7 +5335,6 @@ menu_remove() {
   is_awg_openwrt_installed          && items="$items awg-openwrt"
   is_tg_ws_proxy_rs_installed       && items="$items tg-ws-proxy-rs"
   is_installed "magitrickle"        && items="$items magitrickle"
-  is_installed "opera-proxy"        && items="$items opera-proxy"
   is_telemt_installed               && items="$items luci-app-telemt"
 
   if [ -n "$items" ]; then
@@ -5923,7 +5379,6 @@ menu_remove() {
         awg-openwrt|awg-manager) remove_awg_openwrt ;;
         tg-ws-proxy-rs) remove_tg_ws_proxy_rs ;;
         magitrickle)   remove_magitrickle ;;
-        opera-proxy)   remove_opera_proxy ;;
         telemt|luci-app-telemt) remove_telemt ;;
         nfqws-keenetic|nfqws2-keenetic)
           remove_nfqws_pkg "$target" || true
@@ -5986,8 +5441,18 @@ opkg_upgrade_all() {
 service_upx_compress() {
   echo
   info "$LBL_S1"
-  warn "UPX сожмёт исполняемые файлы в /opt/bin /opt/sbin /opt/usr/bin /opt/libexec."
-  warn "Уже сжатые бинарники UPX обычно пропускает; сбой на одном файле не критичен."
+  local targets="" b
+  for b in /usr/bin/nfqws /usr/bin/nfqws2 /usr/bin/tg-ws-proxy-rs /usr/bin/dpi-detector /usr/bin/telemt /usr/bin/magitrickle /usr/sbin/magitrickle /usr/bin/awg; do
+    if [ -f "$b" ] && [ ! -L "$b" ] && [ -x "$b" ]; then
+      targets="$targets $b"
+    fi
+  done
+  if [ -z "$targets" ]; then
+    warn "Не найдено установленных бинарников для сжатия."
+    return 0
+  fi
+  warn "UPX сожмёт установленные бинарники:${targets}"
+  warn "Уже сжатые бинарники UPX пропускает; сбой на отдельном файле не критичен."
   if ! confirm_yes "Продолжить?"; then
     info "Отменено."
     return 0
@@ -6001,10 +5466,10 @@ service_upx_compress() {
     fi
   fi
   info "Сжатие (может занять несколько минут)..."
-  # || true — отдельные файлы могут не сжаться (уже UPX / не-ELF)
-  find /opt/bin /opt/sbin /opt/usr/bin /opt/libexec \
-    -type f -executable 2>/dev/null \
-    -exec upx --lzma --best {} + 2>/dev/null || true
+  for b in $targets; do
+    info "UPX: $b"
+    upx --lzma --best "$b" 2>/dev/null || true
+  done
   info "Готово."
 }
 
@@ -6025,35 +5490,6 @@ menu_service() {
       *) warn "Неверный выбор." ;;
     esac
   done
-}
-
-# Скрытый пункт o/O — menu-opera (не показывать в меню, не документировать)
-MENU_OPERA_PATH="/opt/menu-opera.sh"
-MENU_OPERA_URL="https://raw.githubusercontent.com/rndnaame/opera-proxy/main/menu-opera.sh"
-
-menu_opera_hidden() {
-  require_entware || return 1
-  local dest="$MENU_OPERA_PATH"
-  if [ ! -f "$dest" ]; then
-    info "Скачивание menu-opera.sh..."
-    mkdir -p "$(dirname "$dest")" 2>/dev/null || true
-    if ! download_file "$MENU_OPERA_URL" "$dest" sh min=2000; then
-      error "Не удалось скачать: $MENU_OPERA_URL"
-      return 1
-    fi
-    chmod +x "$dest" 2>/dev/null || true
-    info "Сохранено: $dest"
-  fi
-  if [ ! -f "$dest" ]; then
-    error "Файл не найден: $dest"
-    return 1
-  fi
-  if [ -c /dev/tty ]; then
-    sh "$dest" < /dev/tty > /dev/tty 2>&1 || true
-  else
-    sh "$dest" || true
-  fi
-  drain_stdin
 }
 
 # ---------------------------------------------------------------------------
@@ -6267,14 +5703,7 @@ upd_mark() {
 
 # Подпись к меткам — печатается, только если хоть одна метка есть.
 upd_legend() {
-  local key rest
-  [ -f "$UPD_CACHE" ] || return 0
-  while read -r key rest; do
-    case "$key" in ''|checked) continue ;; esac
-    [ -n "$(upd_mark "$key")" ] || continue
-    printf '  %s%s%s\n' "$DIM" "$LBL_UPD_LEGEND" "$NC"
-    return 0
-  done < "$UPD_CACHE"
+  upd_has_pending && printf '  %s%s%s\n' "$DIM" "$LBL_UPD_LEGEND" "$NC"
   return 0
 }
 
@@ -6319,14 +5748,6 @@ read_choice() {
 # ---------------------------------------------------------------------------
 # Главное меню
 # ---------------------------------------------------------------------------
-require_entware() {
-  if [ "$ROUTER_OS" = "openwrt" ] || [ "$ROUTER_OS" = "generic" ]; then
-    warn "Утилита рассчитана на Entware — нативной OpenWrt-сборки у этого инструмента нет."
-    return 1
-  fi
-  return 0
-}
-
 main_menu() {
   upd_start
   local os_tag="OpenWrt"
@@ -6390,7 +5811,6 @@ main_menu() {
       14|16) menu_tg_ws_proxy_rs || true ;;
       S|s) menu_service || true ;;
       U|u) opkg_upgrade_all || true ;;
-      o|O) menu_opera_hidden || true ;;
       77) menu_change_language; continue ;;
       88) menu_remove || true ;;
       99) update_self || true ;;
@@ -6437,14 +5857,9 @@ fi
 export SCRIPT_PATH
 
 ensure_menu_symlink() {
-  local target link cur
+  local target link="/usr/bin/menu" cur
   target=$(menu_script_target)
-  if [ "$ROUTER_OS" = "openwrt" ]; then
-    link="/usr/bin/menu"
-    [ -d /usr/bin ] || link="/bin/menu"
-  else
-    link="/opt/bin/menu"
-  fi
+  [ -d /usr/bin ] || link="/bin/menu"
   [ -f "$target" ] || return 0
   # curl -o сбрасывает +x — всегда восстанавливаем, иначе menu → Permission denied
   chmod +x "$target" 2>/dev/null || true
